@@ -1,0 +1,16 @@
+# CPU-only torch: the guard runs on CPU by design (see main.py), and the CUDA
+# wheels would add several GB to the image for nothing.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# ⚠️ transformers must match the version the model is TRAINED and EVALUATED on.
+# Measured on this checkpoint: 4.57.1 and 5.9.0 disagree on 8 of Subset B's 160
+# rows, moving attack detection from 0.3500 to 0.4250. Serving on a different
+# version than the experiments used would make the reported numbers wrong in
+# production. Pinned to the version in the project venv.
+torch==2.9.1
+transformers==5.9.0
+fastapi==0.121.2
+uvicorn[standard]==0.38.0
+pydantic==2.12.3
+sentencepiece==0.2.1
+protobuf==6.33.1

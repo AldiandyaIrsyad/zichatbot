@@ -1,0 +1,201 @@
+query,label,subtype,split,panel_yes,panel_size
+Siapa pejabat yang berwenang menandatangani Peraturan Rektor tentang kemahasiswaan di UPI?,in_domain,direct_upi,calibration,5,5
+Di mana saya bisa mengunduh salinan Statuta Universitas Pendidikan Indonesia 2025?,in_domain,direct_upi,calibration,5,5
+Apakah UPI memiliki Surat Keputusan Rektor tentang etika penggunaan kecerdasan buatan dalam perkuliahan?,in_domain,direct_upi,calibration,4,5
+Peraturan Rektor UPI nomor berapa yang mengatur tentang penyusunan kurikulum program sarjana tahun ini?,in_domain,direct_upi,calibration,5,5
+Bagaimana bunyi pasal dalam SK Rektor mengenai pencegahan kekerasan seksual di lingkungan kampus Bumi Siliwangi?,in_domain,direct_upi,calibration,4,5
+"Keputusan Senat Akademik UPI terkait pemberhentian guru besar, apakah sudah diunggah di laman JDIH UPI?",in_domain,direct_upi,calibration,4,5
+Saya butuh pedoman internal tentang prosedur permohonan cuti bagi dosen dengan status PNS di UPI.,in_domain,direct_upi,calibration,5,5
+Adakah regulasi internal yang menetapkan bahwa kendaraan listrik harus mendapat stiker khusus untuk parkir di area rektorat?,in_domain,direct_upi,calibration,4,5
+Peraturan yang membahas tentang sumbangan pembinaan pendidikan (SPP) mahasiswa baru UPI jalur SNBT itu termasuk Peraturan Rektor atau SK?,in_domain,direct_upi,calibration,4,5
+Sejak kapan Peraturan Rektor tentang organisasi dan tata kerja fakultas di UPI mulai berlaku efektif?,in_domain,direct_upi,calibration,4,5
+Apakah MWA UPI pernah menerbitkan ketetapan tentang investasi dana abadi universitas?,in_domain,direct_upi,calibration,4,5
+"Jelaskan hierarki peraturan di UPI, mulai dari Statuta sampai pedoman mutu akademik internal.",in_domain,direct_upi,calibration,4,5
+Apa saja syarat administratif yang tercantum dalam pedoman UPI agar proposal PKM bisa didanai oleh universitas?,in_domain,direct_upi,calibration,4,5
+Seberapa sering JDIH UPI memperbarui koleksi SK Rektor yang sudah diundangkan?,in_domain,direct_upi,calibration,4,5
+"Dalam Peraturan Rektor terbaru, batas maksimum masa studi mahasiswa program doktor di UPI itu berapa semester?",in_domain,direct_upi,calibration,5,5
+Kepada siapa saya harus melapor jika ada unit kerja di UPI yang melanggar Peraturan Rektor tentang pengadaan barang?,in_domain,direct_upi,locked_test,4,5
+Apakah ada keputusan Senat Akademik UPI yang menolak pemberian gelar doktor kehormatan untuk calon tertentu?,in_domain,direct_upi,locked_test,4,5
+Apa dasar hukum internal UPI yang menjadi acuan pembentukan program studi di luar kampus utama Bandung?,in_domain,direct_upi,locked_test,4,5
+Bagaimana prosedur penyusunan Rencana Strategis unit kerja yang merujuk pada pedoman perencanaan UPI?,in_domain,direct_upi,locked_test,5,5
+Saya mencari SK Rektor UPI yang secara spesifik menaikkan honorarium asisten laboratorium.,in_domain,direct_upi,locked_test,4,5
+Adakah Peraturan Rektor UPI yang melarang dosen menjadi komisaris di perusahaan swasta tanpa izin?,in_domain,direct_upi,locked_test,4,5
+Apakah revisi Statuta UPI 2024 sudah disahkan oleh Menteri dan diunggah di portal JDIH UPI?,in_domain,direct_upi,locked_test,5,5
+"Peraturan Rektor tentang wisuda daring, apakah masih berlaku atau sudah dicabut UPI?",in_domain,direct_upi,locked_test,4,5
+"Dokumen penetapan tarif penggunaan laboratorium terpadu UPI oleh pihak eksternal, itu SK Rektor atau keputusan dekan?",in_domain,direct_upi,locked_test,5,5
+Saya perlu pedoman resmi UPI mengenai tata cara pengisian jabatan wakil dekan bidang akademik.,in_domain,direct_upi,locked_test,4,5
+Apakah Keputusan Rektor tentang satuan biaya perjalanan dinas di UPI untuk tahun ini ada perubahannya?,in_domain,direct_upi,locked_test,5,5
+Di manakah letak ketentuan mengenai sanksi bagi mahasiswa yang merokok di area kampus menurut peraturan UPI?,in_domain,direct_upi,locked_test,5,5
+"Peraturan Rektor tentang penerimaan mahasiswa asing di UPI, di bab berapa dijelaskan soal kuota per prodi?",in_domain,direct_upi,locked_test,4,5
+Apakah UPI sudah memiliki Peraturan Rektor tentang pengelolaan dan pelindungan data pribadi sivitas akademika?,in_domain,direct_upi,locked_test,5,5
+Adakah pedoman khusus dari UPI yang mengatur kolaborasi riset antara dosen UPI Bandung dengan UPI Kampus Cibiru?,in_domain,direct_upi,locked_test,5,5
+Tolong tunjukkan kepada saya Peraturan Rektor UPI yang menjadi payung hukum unit bisnis seperti UPI Press.,in_domain,direct_upi,locked_test,4,5
+Berapa lama biasanya proses pengundangan Peraturan Rektor di JDIH UPI setelah ditandatangani Rektor?,in_domain,direct_upi,locked_test,5,5
+Apakah keputusan MWA UPI nomor 3 tahun 2023 tentang pengangkatan Rektor masih dapat dijadikan rujukan?,in_domain,direct_upi,locked_test,5,5
+"Regulasi internal mengenai hibah penelitian kompetitif nasional yang dikelola LPPM UPI, apakah ada SK-nya?",in_domain,direct_upi,locked_test,4,5
+Apa perbedaan antara pedoman akademik universitas dan Peraturan Rektor tentang pendidikan di UPI dari segi kekuatan mengikat?,in_domain,direct_upi,locked_test,5,5
+"Perubahan ketiga atas Peraturan Rektor tentang kode etik dosen UPI, masalah apa yang direvisi?",in_domain,direct_upi,locked_test,5,5
+"Siapa yang menyusun draft awal suatu pedoman internal UPI, apakah biro hukum atau unit terkait?",in_domain,direct_upi,locked_test,4,5
+Apakah UPI memiliki peraturan internal yang mengatur mekanisme pengisian jabatan Ketua Program Studi melalui pemilihan?,in_domain,direct_upi,locked_test,4,5
+"SK Rektor tentang pembentukan Satuan Tugas Anti Narkoba UPI, apakah mencantumkan struktur dan honorariumnya?",in_domain,direct_upi,locked_test,4,5
+"Dalam pedoman UPI, apakah penyelenggaraan short course internasional harus mendapat persetujuan dari Wakil Rektor bidang akademik?",in_domain,direct_upi,locked_test,5,5
+"Peraturan Rektor UPI tentang tanda kehormatan Satyalancana Karya Satya untuk dosen, apakah ada format pengusulannya di lampiran?",in_domain,direct_upi,locked_test,5,5
+Adakah SK Rektor UPI yang menetapkan secara resmi hari jadi atau dies natalis setiap fakultas?,in_domain,direct_upi,locked_test,4,5
+"Peraturan Rektor mengenai protokol kesehatan di perpustakaan pusat UPI, apakah masih diperpanjang?",in_domain,direct_upi,locked_test,5,5
+Apakah pedoman internal UPI mengizinkan mahasiswa vokasi magang sebagai asisten peneliti di laboratorium fakultas teknik?,in_domain,direct_upi,locked_test,5,5
+Siapa nama Rektor yang menandatangani Peraturan Rektor pertama tentang sistem penjaminan mutu internal UPI?,in_domain,direct_upi,locked_test,5,5
+"SK Rektor terkait izin penggunaan nama dan logo UPI untuk kegiatan kewirausahaan mahasiswa, apakah itu diatur rinci?",in_domain,direct_upi,locked_test,5,5
+"Bunyi lengkap pasal 4 Statuta UPI yang membahas tentang otonomi akademik di bidang ilmiah, tolong dibacakan.",in_domain,direct_upi,locked_test,4,5
+"Kalau saya ingin mencari Peraturan Rektor tentang Dana Abadi UPI, kata kunci apa yang efektif di JDIH?",in_domain,direct_upi,locked_test,4,5
+"Apakah untuk menjadi anggota senat fakultas yang berasal dari unsur mahasiswa, dasar hukumnya cukup dari SK Rektor tentang kemahasiswaan UPI?",in_domain,direct_upi,locked_test,5,5
+Siapa pejabat yang berwenang menetapkan Peraturan Rektor di Universitas Pendidikan Indonesia?,in_domain,direct_upi,locked_test,5,5
+Apakah ada ketentuan yang membahas tentang pakaian dinas harian bagi tenaga kependidikan?,in_domain,indirect_upi,calibration,4,5
+Saya ingin tahu aturan main tentang penggunaan laboratorium untuk penelitian di luar jam kerja.,in_domain,indirect_upi,calibration,4,5
+Bagaimana alur pengajuan cuti bagi dosen yang akan menempuh studi lanjut?,in_domain,indirect_upi,calibration,4,5
+Tolong jelaskan ketentuan tentang pemberian penghargaan bagi pegawai yang sudah mengabdi 30 tahun.,in_domain,indirect_upi,calibration,4,5
+Adakah pedoman tentang penamaan gedung atau fasilitas baru di lingkungan kampus?,in_domain,indirect_upi,calibration,4,5
+"Berapa jumlah maksimal SKS yang boleh diambil mahasiswa S1 per semester jika IPK-nya di atas 3,5?",in_domain,indirect_upi,calibration,4,5
+Bagaimana cara mengajukan keberatan atas hasil penilaian kinerja dosen?,in_domain,indirect_upi,calibration,4,5
+Saya butuh informasi tentang kode etik dosen dalam berinteraksi dengan mahasiswa.,in_domain,indirect_upi,calibration,4,5
+Adakah aturan yang membahas tentang penggunaan kendaraan dinas untuk keperluan pribadi?,in_domain,indirect_upi,calibration,4,5
+Apakah ada ketentuan tentang pembentukan dan pembubaran unit kegiatan mahasiswa?,in_domain,indirect_upi,calibration,4,5
+Apa saja syarat untuk mengajukan permohonan hak paten atas hasil riset di kampus?,in_domain,indirect_upi,calibration,4,5
+Adakah aturan tentang sanksi bagi mahasiswa yang melakukan demonstrasi tanpa izin?,in_domain,indirect_upi,calibration,4,5
+Apakah ada ketentuan yang membahas tentang keamanan data pribadi mahasiswa di sistem informasi?,in_domain,indirect_upi,calibration,4,5
+Siapa yang berwenang memberikan izin penelitian bagi peneliti asing di lingkungan kampus?,in_domain,indirect_upi,calibration,4,5
+Apakah ada ketentuan yang mengatur soal pemakaian seragam khusus hari Rabu?,in_domain,indirect_upi,calibration,4,5
+Tolong jelaskan prosedur pengunduran diri mahasiswa secara resmi.,in_domain,indirect_upi,locked_test,4,5
+Saya ingin tahu aturan tentang hak cipta karya ilmiah dosen yang diterbitkan kampus.,in_domain,indirect_upi,locked_test,4,5
+Apakah rektor mengeluarkan edaran tentang larangan merokok di area kampus?,in_domain,indirect_upi,locked_test,4,5
+Syarat dan tata cara pemilihan ketua senat fakultas.,in_domain,indirect_upi,locked_test,4,5
+Apakah ada SK tentang pembentukan tim penjaminan mutu di prodi?,in_domain,indirect_upi,locked_test,4,5
+Aturan tentang penggunaan dana penelitian dari RKAT fakultas.,in_domain,indirect_upi,locked_test,4,5
+Saya ingin membaca kode etik dosen yang berlaku di institusi ini.,in_domain,indirect_upi,locked_test,4,5
+Bagaimana prosedur pengajuan hak paten hasil riset mahasiswa?,in_domain,indirect_upi,locked_test,4,5
+Apakah ada ketentuan tentang alih kredit dari kampus lain?,in_domain,indirect_upi,locked_test,4,5
+"Saya mahasiswa baru, apa pedoman untuk kegiatan orientasi?",in_domain,indirect_upi,locked_test,4,5
+Apakah ada ketentuan internal mengenai pencegahan kekerasan seksual?,in_domain,indirect_upi,locked_test,4,5
+Bagaimana aturan beban kerja dosen minimal 12 SKS?,in_domain,indirect_upi,locked_test,4,5
+"Kalau mau mengajukan cuti panjang bagi dosen, syaratnya apa saja ya?",in_domain,indirect_upi,locked_test,4,5
+Adakah ketentuan yang mengatur batas usia pensiun tenaga kependidikan di sini?,in_domain,indirect_upi,locked_test,4,5
+Bagaimana mekanisme pengangkatan dosen tidak tetap menjadi dosen tetap?,in_domain,indirect_upi,locked_test,4,5
+Berapa jumlah minimal kehadiran agar bisa mengikuti ujian akhir semester?,in_domain,indirect_upi,locked_test,4,5
+Siapa yang menetapkan tarif uang kuliah tunggal untuk jalur mandiri?,in_domain,indirect_upi,locked_test,4,5
+Apa saja dokumen yang harus disiapkan untuk mengusulkan kenaikan pangkat lektor kepala?,in_domain,indirect_upi,locked_test,4,5
+Bagaimana ketentuan penggunaan dana abadi untuk beasiswa riset?,in_domain,indirect_upi,locked_test,4,5
+Prosedur pengunduran diri dosen PNS di UPI itu seperti apa ya?,in_domain,indirect_upi,locked_test,4,5
+Bagaimana mekanisme pengaduan jika saya merasa dirugikan oleh keputusan fakultas?,in_domain,indirect_upi,locked_test,4,5
+"Saya ingin tahu aturan beasiswa internal, yang dari rektor itu lho.",in_domain,indirect_upi,locked_test,5,5
+Bagaimana cara mengajukan cuti bagi tenaga kependidikan?,in_domain,indirect_upi,locked_test,4,5
+Apa isi statuta yang mengatur tentang kebebasan mimbar akademik?,in_domain,indirect_upi,locked_test,4,5
+Apakah dosen tetap non-PNS di UPI bisa menduduki jabatan ketua program studi?,in_domain,indirect_upi,locked_test,5,5
+"Berapa batas maksimal SKS yang boleh diambil mahasiswa S1 jika IPK semester lalu di atas 3,5?",in_domain,indirect_upi,locked_test,4,5
+Apakah ada aturan yang membolehkan mahasiswa magang di luar negeri menggantikan KKN?,in_domain,indirect_upi,locked_test,4,5
+Apakah laboratorium di UPI boleh dipakai oleh pihak eksternal di akhir pekan?,in_domain,indirect_upi,locked_test,4,5
+Siapa yang berwenang menandatangani ijazah dan transkrip nilai untuk program sarjana di kampus ini?,in_domain,indirect_upi,locked_test,4,5
+"Kalau terjadi pelanggaran etik berat oleh mahasiswa, sidangnya di tingkat mana dan siapa yang memutuskan sanksinya?",in_domain,indirect_upi,locked_test,4,5
+Gimana sih aturan di kampus buat mahasiswa yang mau cuti? Ada syarat khusus nggak?,in_domain,indirect_upi,locked_test,4,5
+"Saya dengar ada ketentuan baru soal batas usia pensiun dosen di sini, bisa tolong jelaskan isinya?",in_domain,indirect_upi,locked_test,4,5
+Apakah SK Rektor yang mengatur tentang etika bermedia sosial bagi tendik sudah berlaku?,in_domain,indirect_upi,locked_test,4,5
+Gimana sih aturan soal mahasiswa yang mau ambil cuti akademik di kampus ini?,in_domain,indirect_upi,locked_test,4,5
+Prosedur lengkap buat ngajuin pendirian program studi baru di luar kampus utama itu diatur di mana?,in_domain,indirect_upi,locked_test,4,5
+"Saya butuh pedoman penyusunan kurikulum yang dikeluarkan oleh Kementerian Pendidikan, bukan dari UPI.",out_of_domain,near_miss_government,calibration,4,5
+"Apa isi pedoman pengelolaan jurnal ilmiah yang diterbitkan oleh LIPI, bukan oleh UPI?",out_of_domain,near_miss_government,calibration,4,5
+Tolong carikan Peraturan Rektor Universitas Gadjah Mada Nomor 5 Tahun 2022 tentang Kode Etik Dosen,out_of_domain,near_miss_government,calibration,4,5
+Saya butuh salinan lengkap Statuta Universitas Indonesia yang terbaru,out_of_domain,near_miss_government,calibration,4,5
+Di mana saya bisa mengunduh Keputusan Senat Akademik Institut Teknologi Bandung tentang pemberhentian rektor?,out_of_domain,near_miss_government,calibration,5,5
+Apakah ada pedoman internal Universitas Airlangga mengenai pencegahan plagiarisme yang bisa diakses publik?,out_of_domain,near_miss_government,calibration,4,5
+Cari peraturan daerah Kota Bandung tentang retribusi parkir di tepi jalan umum,out_of_domain,near_miss_government,calibration,5,5
+Saya mencari SK Rektor Universitas Padjadjaran tentang pembentukan program studi baru di Fakultas Hukum,out_of_domain,near_miss_government,calibration,4,5
+Tampilkan dokumen Peraturan Menteri Pendidikan dan Kebudayaan Nomor 3 Tahun 2020 tentang Standar Nasional Pendidikan Tinggi,out_of_domain,near_miss_government,calibration,5,5
+Berikan saya isi lengkap Peraturan Gubernur Jawa Barat tentang jam kerja ASN selama bulan Ramadan,out_of_domain,near_miss_government,calibration,4,5
+Saya ingin membaca pedoman akademik Universitas Diponegoro edisi 2023,out_of_domain,near_miss_government,locked_test,4,5
+Apakah tersedia Keputusan Rektor Universitas Brawijaya tentang tarif uang kuliah tunggal?,out_of_domain,near_miss_government,locked_test,4,5
+Cari peraturan rektor Universitas Negeri Yogyakarta yang mengatur tentang organisasi kemahasiswaan,out_of_domain,near_miss_government,locked_test,5,5
+Tunjukkan SK Rektor Universitas Sebelas Maret tentang pengangkatan dekan periode 2021-2025,out_of_domain,near_miss_government,locked_test,4,5
+Di mana saya bisa mendapatkan salinan Peraturan Daerah Provinsi DKI Jakarta tentang penanganan banjir?,out_of_domain,near_miss_government,locked_test,5,5
+Saya mencari pedoman penyusunan kurikulum yang diterbitkan oleh Universitas Andalas,out_of_domain,near_miss_government,locked_test,4,5
+Apakah ada dokumen resmi Keputusan Senat Universitas Sumatera Utara tentang pemberian gelar doktor kehormatan?,out_of_domain,near_miss_government,locked_test,5,5
+Berikan saya Peraturan Rektor Universitas Jenderal Soedirman tentang sistem informasi akademik,out_of_domain,near_miss_government,locked_test,5,5
+Cari peraturan internal Institut Pertanian Bogor tentang penggunaan laboratorium riset,out_of_domain,near_miss_government,locked_test,4,5
+Saya butuh dokumen Peraturan Bupati Bandung Barat tentang izin mendirikan bangunan,out_of_domain,near_miss_government,locked_test,5,5
+Tampilkan Statuta Universitas Sriwijaya yang mengatur tentang pemilihan rektor,out_of_domain,near_miss_government,locked_test,4,5
+Apakah tersedia SK Rektor Universitas Lampung tentang pembentukan satuan pengawas internal?,out_of_domain,near_miss_government,locked_test,4,5
+Saya ingin membaca pedoman beasiswa yang dikeluarkan oleh Universitas Mataram,out_of_domain,near_miss_government,locked_test,4,5
+Cari Peraturan Menteri Keuangan tentang standar biaya masukan untuk pendidikan tinggi,out_of_domain,near_miss_government,locked_test,4,5
+Di mana saya bisa mengakses Peraturan Rektor Universitas Syiah Kuala tentang kampus merdeka?,out_of_domain,near_miss_government,locked_test,5,5
+Saya mencari Keputusan Rektor Universitas Cenderawasih tentang kalender akademik tahun ini,out_of_domain,near_miss_government,locked_test,4,5
+Tolong berikan dokumen Peraturan Daerah Kabupaten Sleman tentang pengelolaan sampah,out_of_domain,near_miss_government,locked_test,4,5
+Apakah ada pedoman etika penelitian dari Universitas Udayana yang bisa saya baca?,out_of_domain,near_miss_government,locked_test,4,5
+Saya butuh Statuta Universitas Negeri Malang yang memuat wewenang senat universitas,out_of_domain,near_miss_government,locked_test,4,5
+Cari SK Rektor Universitas Mulawarman tentang tata cara pemilihan ketua himpunan mahasiswa,out_of_domain,near_miss_government,locked_test,5,5
+Tampilkan Peraturan Rektor Universitas Bengkulu tentang penggunaan dana penelitian hibah internal,out_of_domain,near_miss_government,locked_test,4,5
+Saya ingin melihat isi Peraturan Menteri Dalam Negeri tentang pedoman penyusunan peraturan daerah,out_of_domain,near_miss_government,locked_test,4,5
+Berikan saya dokumen Keputusan Senat Akademik Universitas Tadulako tentang kode etik mahasiswa,out_of_domain,near_miss_government,locked_test,5,5
+Tolong carikan Peraturan Rektor Universitas Gadjah Mada Nomor 12 Tahun 2023 tentang pencegahan kekerasan seksual di lingkungan kampus UGM.,out_of_domain,near_miss_government,locked_test,4,5
+Apa saja perubahan terbaru dalam Undang-Undang Nomor 12 Tahun 2012 tentang Pendidikan Tinggi?,out_of_domain,adjacent_legal,calibration,4,5
+Bagaimana mekanisme penyelesaian sengketa hasil pemilihan rektor di perguruan tinggi negeri menurut Permendikbud?,out_of_domain,adjacent_legal,calibration,5,5
+Apakah Permenristekdikti Nomor 44 Tahun 2015 mengatur standar nasional pendidikan tinggi untuk program doktor?,out_of_domain,adjacent_legal,calibration,4,5
+Jelaskan kewajiban perguruan tinggi swasta dalam menyusun statuta berdasarkan PP Nomor 4 Tahun 2014.,out_of_domain,adjacent_legal,calibration,4,5
+Siapa yang berwenang memberikan sanksi administratif kepada perguruan tinggi yang melanggar ketentuan akreditasi?,out_of_domain,adjacent_legal,calibration,4,5
+Apakah ada aturan dari Kemenkumham tentang tata cara pengundangan peraturan internal universitas dalam Berita Negara?,out_of_domain,adjacent_legal,calibration,5,5
+Bagaimana bunyi Pasal 65 UU Sisdiknas terkait peran masyarakat dalam penyelenggaraan pendidikan?,out_of_domain,adjacent_legal,calibration,5,5
+Apa definisi otonomi perguruan tinggi menurut Undang-Undang Nomor 20 Tahun 2003?,out_of_domain,adjacent_legal,calibration,4,5
+Apakah ada surat edaran dari Dirjen Dikti tentang larangan pungutan liar saat penerimaan mahasiswa baru?,out_of_domain,adjacent_legal,calibration,5,5
+Bagaimana prosedur pendirian program studi baru di luar kampus utama menurut Permendikbudristek terbaru?,out_of_domain,adjacent_legal,calibration,5,5
+Apakah Keputusan Menteri Pendidikan tentang pembukaan program profesi insinyur berlaku untuk semua universitas?,out_of_domain,adjacent_legal,locked_test,5,5
+Jelaskan perbedaan wewenang Senat Akademik dan Majelis Wali Amanat dalam PTN-BH secara umum.,out_of_domain,adjacent_legal,locked_test,5,5
+Apa saja indikator kinerja utama perguruan tinggi negeri yang ditetapkan oleh Kementerian Pendidikan?,out_of_domain,adjacent_legal,locked_test,4,5
+Bagaimana aturan penggunaan gelar akademik profesor kehormatan di Indonesia?,out_of_domain,adjacent_legal,locked_test,5,5
+Apakah ada regulasi tentang kerja sama internasional universitas negeri dengan lembaga asing?,out_of_domain,adjacent_legal,locked_test,4,5
+Siapa yang menetapkan formasi jabatan fungsional dosen di lingkungan kementerian?,out_of_domain,adjacent_legal,locked_test,5,5
+Bagaimana ketentuan cuti bagi pegawai negeri sipil yang menjadi dosen menurut PP Nomor 11 Tahun 2017?,out_of_domain,adjacent_legal,locked_test,4,5
+Apakah ada batasan usia pensiun untuk guru besar di perguruan tinggi negeri?,out_of_domain,adjacent_legal,locked_test,4,5
+Jelaskan proses pengangkatan dosen tetap non-PNS di perguruan tinggi negeri badan hukum.,out_of_domain,adjacent_legal,locked_test,4,5
+Apa isi Peraturan Pemerintah Nomor 57 Tahun 2022 tentang penyelenggaraan pendidikan tinggi?,out_of_domain,adjacent_legal,locked_test,5,5
+Bagaimana skema pembiayaan penelitian dosen melalui dana BOPTN?,out_of_domain,adjacent_legal,locked_test,4,5
+Apakah ada pedoman dari BAN-PT tentang instrumen akreditasi program studi untuk siklus terbaru?,out_of_domain,adjacent_legal,locked_test,4,5
+Bagaimana aturan pengelolaan barang milik negara yang dipinjam-pakaikan ke universitas?,out_of_domain,adjacent_legal,locked_test,4,5
+Apakah ada undang-undang yang mengatur tentang kebebasan akademik dan mimbar akademik di kampus?,out_of_domain,adjacent_legal,locked_test,4,5
+Apakah ada peraturan tentang kewajiban publikasi jurnal internasional bagi mahasiswa S2?,out_of_domain,adjacent_legal,locked_test,4,5
+Siapa yang berhak memberikan gelar doktor kehormatan di Indonesia?,out_of_domain,adjacent_legal,locked_test,4,5
+Bagaimana aturan pembentukan dan pembubaran unit kegiatan mahasiswa di tingkat nasional?,out_of_domain,adjacent_legal,locked_test,5,5
+Apakah ada regulasi dari Ombudsman tentang maladministrasi dalam penerimaan mahasiswa jalur mandiri?,out_of_domain,adjacent_legal,locked_test,4,5
+Jelaskan perbedaan antara politeknik negeri dan universitas negeri dalam sistem pendidikan tinggi Indonesia.,out_of_domain,adjacent_legal,locked_test,5,5
+Apa saja perubahan terbaru dalam Undang-Undang Nomor 12 Tahun 2012 tentang Pendidikan Tinggi setelah disahkannya UU Cipta Kerja?,out_of_domain,adjacent_legal,locked_test,5,5
+Bagaimana mekanisme penyelesaian sengketa hasil pemilihan rektor di perguruan tinggi negeri menurut Permendikbudristek?,out_of_domain,adjacent_legal,locked_test,5,5
+Apakah ada batasan masa jabatan untuk anggota senat akademik di universitas negeri berdasarkan peraturan perundang-undangan yang berlaku di Indonesia?,out_of_domain,adjacent_legal,locked_test,4,5
+Tolong jelaskan prosedur pengajuan program studi baru di luar domisili utama perguruan tinggi negeri sesuai regulasi Kemendikbudristek.,out_of_domain,adjacent_legal,locked_test,4,5
+Tolong jelaskan tahapan lelang jabatan pimpinan tinggi pratama di Pemerintah Provinsi Jawa Barat.,out_of_domain,off_topic,calibration,4,5
+Berapa tarif terbaru Pajak Bumi dan Bangunan untuk properti komersial di Kota Bandung?,out_of_domain,off_topic,calibration,4,5
+Apa isi Instruksi Presiden Nomor 1 Tahun 2024 tentang efisiensi belanja kementerian?,out_of_domain,off_topic,calibration,4,5
+Apa saja kewajiban perusahaan dalam program Jaminan Kesehatan Nasional menurut BPJS?,out_of_domain,off_topic,calibration,4,5
+Apa saja larangan bagi aparatur sipil negara dalam pemilihan umum kepala daerah?,out_of_domain,off_topic,calibration,4,5
+Bagaimana prosedur banding atas putusan Komisi Pengawas Persaingan Usaha?,out_of_domain,off_topic,calibration,4,5
+Apa saja kode etik advokat dalam menangani perkara pro bono?,out_of_domain,off_topic,calibration,4,5
+Jelaskan prosedur audit investigatif oleh Badan Pemeriksa Keuangan.,out_of_domain,off_topic,calibration,4,5
+Bagaimana prosedur pengajuan cuti melahirkan bagi pegawai negeri sipil di lingkungan Kementerian Keuangan?,out_of_domain,off_topic,calibration,4,5
+Tolong jelaskan tahapan mediasi dalam penyelesaian sengketa tanah warisan menurut hukum perdata.,out_of_domain,off_topic,calibration,4,5
+Apa saja persyaratan terbaru untuk mendirikan koperasi simpan pinjam di Kabupaten Bandung Barat?,out_of_domain,off_topic,locked_test,4,5
+Berapa tarif resmi pengurusan sertifikat tanah di Kantor Badan Pertanahan Nasional Kota Cimahi?,out_of_domain,off_topic,locked_test,4,5
+Apakah ada aturan dari OJK mengenai batas maksimum bunga pinjaman online yang boleh dikenakan kepada konsumen?,out_of_domain,off_topic,locked_test,4,5
+Siapa saja pejabat yang berwenang menerbitkan izin mendirikan bangunan untuk gedung komersial di Kota Bandung?,out_of_domain,off_topic,locked_test,4,5
+Apa saja kode etik yang harus dipatuhi oleh seorang notaris dalam menjalankan jabatannya?,out_of_domain,off_topic,locked_test,4,5
+Apakah ada pedoman dari Mahkamah Agung tentang penerapan restorative justice dalam perkara pidana ringan?,out_of_domain,off_topic,locked_test,4,5
+Bagaimana prosedur ekspor hasil pertanian berupa kopi robusta ke pasar Eropa berdasarkan aturan Bea Cukai?,out_of_domain,off_topic,locked_test,5,5
+Jelaskan sanksi pidana bagi pelaku tindak pidana korupsi dana bantuan sosial bencana alam.,out_of_domain,off_topic,locked_test,4,5
+Bagaimana format resmi surat kuasa khusus untuk mewakili klien dalam persidangan perdata di pengadilan negeri?,out_of_domain,off_topic,locked_test,4,5
+Bagaimana prosedur mutasi PNS dari Pemerintah Kota Bandung ke Pemerintah Provinsi Jawa Barat?,out_of_domain,off_topic,locked_test,5,5
+Bagaimana mekanisme pengajuan banding atas putusan pengadilan tata usaha negara?,out_of_domain,off_topic,locked_test,4,5
+Berapa tarif resmi pengurusan paspor elektronik di Kantor Imigrasi Kelas I Bandung?,out_of_domain,off_topic,locked_test,4,5
+Jelaskan peran Ombudsman Republik Indonesia dalam mengawasi pelayanan publik di kementerian.,out_of_domain,off_topic,locked_test,5,5
+Apa isi Peraturan Menteri Kesehatan tentang standar akreditasi rumah sakit swasta?,out_of_domain,off_topic,locked_test,4,5
+Bagaimana prosedur pengadaan barang dan jasa di lingkungan pemerintah provinsi Jawa Barat untuk tahun anggaran 2025?,out_of_domain,off_topic,locked_test,5,5
+Dimanakah lokasi Kantor Arsip Nasional Republik Indonesia di Jakarta dan bagaimana prosedur kunjungannya?,out_of_domain,off_topic,locked_test,4,5
+Tolong jelaskan sejarah pendirian Museum Konferensi Asia Afrika dan koleksi benda bersejarah yang ada di dalamnya.,out_of_domain,off_topic,locked_test,5,5
+Tolong jelaskan tahapan mediasi dalam penyelesaian sengketa tanah wakaf menurut hukum adat setempat.,out_of_domain,off_topic,locked_test,4,5
+Berapa denda keterlambatan pengembalian buku di Perpustakaan Daerah Kota Bandung?,out_of_domain,off_topic,locked_test,5,5
+Siapa pejabat yang berwenang menandatangani surat keterangan domisili usaha untuk keperluan lelang pengadaan barang di lingkungan Pemerintah Kota Cimahi?,out_of_domain,off_topic,locked_test,4,5
+Apa saja persyaratan terbaru untuk mengajukan sertifikasi halal produk makanan kemasan dari BPJPH?,out_of_domain,off_topic,locked_test,4,5
+Bagaimana prosedur pengajuan cuti melahirkan bagi pegawai negeri sipil di lingkungan Pemerintah Kota Bandung berdasarkan Peraturan Wali Kota terbaru?,out_of_domain,off_topic,locked_test,4,5
+Apa saja syarat terbaru untuk mendirikan koperasi simpan pinjam di wilayah Kabupaten Bandung Barat?,out_of_domain,off_topic,locked_test,4,5

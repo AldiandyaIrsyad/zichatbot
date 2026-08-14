@@ -1,0 +1,135 @@
+<!-- Sidebar -->
+<aside x-data="sidebarData()" class="w-[260px] bg-slate-100 dark:bg-darksidebar flex flex-col transition-all duration-300 h-full shrink-0">
+  <div class="p-3 space-y-2 border-b border-slate-200 dark:border-darkborder">
+    <a href="/admin/" class="w-full flex items-center justify-start gap-3 rounded-lg hover:bg-slate-200 dark:hover:bg-[#202020] px-3 py-3 text-sm font-medium transition-colors text-slate-700 dark:text-gray-300">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+        <path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" />
+      </svg>
+      Admin Dashboard
+    </a>
+    <a href="/demo/" class="w-full flex items-center justify-start gap-3 rounded-lg hover:bg-slate-200 dark:hover:bg-[#202020] px-3 py-3 text-sm font-medium transition-colors text-slate-700 dark:text-gray-300">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+        <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.72-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
+      </svg>
+      Demo: Judul vs Chatbot
+    </a>
+    <button @click="newChat" class="w-full flex items-center justify-start gap-3 rounded-lg hover:bg-slate-200 dark:hover:bg-[#202020] px-3 py-3 text-sm font-medium transition-colors text-slate-900 dark:text-white">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+        <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
+      </svg>
+      New chat
+    </button>
+  </div>
+  <div class="flex-1 overflow-y-auto px-3 space-y-1 mt-2">
+    <template x-for="session in sessions" :key="session.id">
+      <div class="group relative flex items-center w-full mb-1" x-data="{ open: false }" @click.outside="open = false">
+        
+        <button 
+          @click="selectSession(session.id)" 
+          :class="['flex-1 text-left px-3 py-2.5 rounded-lg text-sm truncate transition-colors flex items-center gap-2', isActive(session.id) ? 'bg-slate-200 dark:bg-[#202020] text-slate-900 dark:text-white font-medium' : 'text-slate-600 dark:text-gray-400 hover:bg-slate-200/50 dark:hover:bg-[#202020] hover:text-slate-900 dark:hover:text-gray-200']"
+        >
+          <span class="truncate" x-text="session.title"></span>
+        </button>
+
+        <button 
+          @click.stop="open = !open" 
+          class="absolute right-2 p-1.5 rounded hover:bg-slate-300 dark:hover:bg-gray-600 text-slate-500 dark:text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>
+        </button>
+
+        <div 
+          x-show="open" 
+          x-transition.opacity 
+          class="absolute right-0 top-8 w-32 bg-white dark:bg-darkinput shadow-lg rounded-md border border-slate-200 dark:border-darkborder z-50"
+          style="display: none;"
+        >
+          <button 
+            @click.stop="deleteSession(session.id); open = false" 
+            class="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-slate-100 dark:hover:bg-gray-700 rounded-md transition-colors flex items-center gap-2"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> 
+            Delete
+          </button>
+        </div>
+      </div>
+    </template>
+  </div>
+</aside>
+
+<script>
+  document.addEventListener('alpine:init', () => {
+    Alpine.data('sidebarData', () => ({
+      sessions: [],
+      currentSessionId: new URLSearchParams(window.location.search).get('session_id') || null,
+      
+      init() {
+        this.loadSessions();
+        
+        window.addEventListener('session-created', (e) => {
+          this.currentSessionId = e.detail.id;
+          this.loadSessions();
+        });
+        
+        window.addEventListener('session-updated', () => {
+          this.loadSessions();
+        });
+        
+        window.addEventListener('load-session', (e) => {
+          this.currentSessionId = e.detail.id;
+        });
+      },
+      
+      isActive(id) {
+        return this.currentSessionId === id;
+      },
+      
+      async loadSessions() {
+        try {
+          const res = await fetch('/api/chat/sessions');
+          const data = await res.json();
+          this.sessions = data.reverse();
+        } catch (e) {
+          console.error("Failed to load sessions", e);
+        }
+      },
+      
+      selectSession(id) {
+        if (window.location.pathname === '/') {
+          this.currentSessionId = id;
+          window.dispatchEvent(new CustomEvent('load-session', { detail: { id } }));
+        } else {
+          window.location.href = '/?session_id=' + id;
+        }
+      },
+      
+      newChat() {
+        if (window.location.pathname === '/') {
+          this.currentSessionId = null;
+          window.dispatchEvent(new Event('new-session'));
+        } else {
+          window.location.href = '/';
+        }
+      },
+      
+      async deleteSession(id) {
+        if (!confirm('Are you sure you want to delete this chat?')) return;
+        try {
+          const res = await fetch(`/api/chat/sessions/${id}`, { method: 'DELETE' });
+          if (res.ok) {
+            if (this.currentSessionId === id) {
+              if (window.location.pathname === '/') {
+                this.newChat();
+              } else {
+                window.location.href = '/';
+              }
+            }
+            this.loadSessions();
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    }));
+  });
+</script>

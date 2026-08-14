@@ -1,0 +1,59 @@
+# Direct runtime dependencies for the JDIH chatbot.
+#
+# Derived from the working `skripsi_app` venv; exact pinned snapshot is in
+# `requirements.lock.txt` (pip freeze of the same env). For a reproducible
+# install use the lock; this file is the readable, grouped list of direct deps.
+
+# --- Web framework ---
+fastapi
+uvicorn[standard]
+python-multipart
+
+# --- Settings / validation ---
+pydantic
+pydantic-settings
+
+# --- Persistence / vector store ---
+sqlalchemy[asyncio]
+asyncpg
+qdrant-client
+
+# --- HTTP clients ---
+httpx
+aiohttp
+openai
+python-dotenv
+
+# --- Logging / retries ---
+structlog
+tenacity
+
+# --- NLP / ML (chunking, embeddings, NLI, guard) ---
+numpy
+scipy
+scikit-learn
+pandas
+torch
+transformers
+tokenizers
+datasets
+accelerate
+FlagEmbedding
+bert-score
+bs4  # beautifulsoup4
+langchain-core
+langchain-text-splitters
+fitz  # PyMuPDF
+
+# --- PDF partitioning ---
+unstructured
+
+# --- Scraping / document tooling ---
+cloudscraper
+playwright
+patchright
+python-docx
+
+# --- Tests ---
+pytest
+pytest-asyncio

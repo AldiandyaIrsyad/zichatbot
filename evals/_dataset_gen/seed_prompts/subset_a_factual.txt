@@ -1,0 +1,33 @@
+# Seed Prompts for Subset A (RAG QA Triplets)
+
+# Domain: internal legal/regulatory documents of Universitas Pendidikan
+# Indonesia (UPI), published via the JDIH portal (Peraturan Rektor, SK Rektor,
+# Statuta UPI, keputusan Senat Akademik / Majelis Wali Amanat (MWA), pedoman).
+
+## Factual Questions
+Generate factual questions that can be answered directly from a single paragraph
+of the source document. The answer should be a verbatim or near-verbatim extraction.
+
+Example:
+{"question": "Apa dasar hukum penetapan Statuta UPI?", "category": "factual", "ground_truth_answer": "Statuta UPI ditetapkan melalui Peraturan Pemerintah Nomor 15 Tahun 2014", "source_context": "Statuta Universitas Pendidikan Indonesia ditetapkan melalui Peraturan Pemerintah Nomor 15 Tahun 2014 tentang Statuta Universitas Pendidikan Indonesia."}
+
+## Procedural Questions
+Generate procedural questions about steps, processes, or procedures described
+in the document. The answer should list the steps in order.
+
+Example:
+{"question": "Apa saja tahapan pengajuan cuti akademik menurut peraturan rektor?", "category": "procedural", "ground_truth_answer": "Tahapan meliputi: 1) Pengajuan permohonan ke fakultas, 2) Persetujuan dosen wali, 3) Verifikasi bagian akademik, 4) Penerbitan surat keputusan", "source_context": "Pengajuan cuti akademik dilakukan melalui tahapan: 1) mahasiswa mengajukan permohonan ke fakultas, 2) persetujuan dosen wali, 3) verifikasi bagian akademik, 4) penerbitan surat keputusan."}
+
+## Multi-hop Questions
+Generate multi-hop questions that require synthesizing information from multiple
+paragraphs or sections of the document.
+
+Example:
+{"question": "Bagaimana hubungan antara Majelis Wali Amanat dan Senat Akademik dalam tata kelola UPI?", "category": "multi-hop", "ground_truth_answer": "MWA menetapkan kebijakan umum universitas, sedangkan Senat Akademik menjalankan fungsi penetapan kebijakan, pertimbangan, dan pengawasan di bidang akademik", "source_context": "Majelis Wali Amanat menetapkan kebijakan umum universitas. Senat Akademik menjalankan fungsi penetapan kebijakan, pertimbangan, dan pengawasan di bidang akademik."}
+
+## Out-of-Domain Questions
+Generate questions that are outside the domain of the knowledge base (not about
+UPI's internal legal/regulatory documents).
+
+Example:
+{"question": "Berapa harga emas hari ini?", "category": "out-of-domain", "ground_truth_answer": "NONE", "source_context": "NONE"}

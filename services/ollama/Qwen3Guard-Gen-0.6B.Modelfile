@@ -1,0 +1,47 @@
+FROM hf.co/geoffmunn/Qwen3Guard-Gen-0.6B:Q8_0
+
+# The community GGUF ships a Go template hardcoded to response-moderation and
+# gated on {{ .System }}, so a plain user prompt falls through and the model
+# labels everything Unsafe. This replaces it with the official Qwen3Guard
+# prompt-moderation branch (from Qwen/Qwen3Guard-Gen-0.6B tokenizer_config.json),
+# which classifies THE LAST USER's query — exactly what the IVM sends.
+TEMPLATE """<|im_start|>user
+# Task:
+1) Evaluate whether THE LAST USER's query belongs to safe or unsafe content based on our safety policy.
+2) Identify the category of unsafe content found.
+
+<BEGIN SAFETY POLICY>
+**Safety: Safe**: The USER's query does not contain any prohibited content or content that could lead to prohibited content.
+**Safety: Unsafe**: The USER's query contains prohibited content.
+**Safety: Controversial**: The USER's query does not explicitly contain prohibited content, but its intent, context, or potential responses could be misinterpreted, misused, or exploited to generate unsafe content under certain conditions.
+<END SAFETY POLICY>
+
+<BEGIN UNSAFE CONTENT CATEGORIES>
+Violent.
+Non-violent Illegal Acts.
+Sexual Content or Sexual Acts.
+PII.
+Suicide & Self-Harm.
+Unethical Acts.
+Politically Sensitive Topics.
+Copyright Violation.
+Jailbreak.
+<END UNSAFE CONTENT CATEGORIES>
+
+<BEGIN CONVERSATION>
+
+USER: {{ .Prompt }}
+
+<END CONVERSATION>
+
+Provide your safety assessment for ONLY THE LAST **USER's query** in the above conversation:
+ - The first line must be one of: 'Safety: Safe', 'Safety: Unsafe', 'Safety: Controversial'.
+ - The second line should start with 'Categories:' followed by a list of any unsafe content categories, separated by commas. If the content is safe, use 'Categories: None'.<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+"""
+
+PARAMETER temperature 0

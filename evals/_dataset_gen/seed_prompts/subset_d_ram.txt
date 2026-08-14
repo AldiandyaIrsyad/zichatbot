@@ -1,0 +1,30 @@
+# Seed Prompts for Subset D (RAM Ground Truth)
+
+# Domain: UPI internal legal/regulatory documents (JDIH). Responses are run
+# through the live pipeline; each sentence is labeled against retrieved context.
+
+## Supported Sentences
+Generate response sentences that are directly supported by the retrieved context.
+
+Example:
+{"question_id": "q-001", "question": "Apa dasar hukum Statuta UPI?", "full_response": "Statuta UPI ditetapkan melalui Peraturan Pemerintah Nomor 15 Tahun 2014. Statuta menjadi acuan tata kelola universitas.", "sentence_id": 0, "sentence_text": "Statuta UPI ditetapkan melalui Peraturan Pemerintah Nomor 15 Tahun 2014.", "retrieved_context": "Statuta Universitas Pendidikan Indonesia ditetapkan melalui Peraturan Pemerintah Nomor 15 Tahun 2014.", "label": "supported", "verifier_note": "Sentence directly entailed by context"}
+
+## Partially Supported Sentences
+Generate response sentences that are partially supported — some claims are
+in the context, others are not.
+
+Example:
+{"question_id": "q-002", "question": "Apa organ pengelola UPI?", "full_response": "UPI memiliki beberapa organ pengelola. Majelis Wali Amanat adalah organ yang paling berpengaruh.", "sentence_id": 1, "sentence_text": "Majelis Wali Amanat adalah organ yang paling berpengaruh.", "retrieved_context": "Organ UPI terdiri atas Majelis Wali Amanat, Senat Akademik, dan Rektor.", "label": "partially_supported", "verifier_note": "MWA disebut dalam konteks, tetapi 'paling berpengaruh' bersifat subjektif dan tidak didukung"}
+
+## Not Supported Sentences (Hallucination)
+Generate response sentences that contradict or are not supported by the context.
+
+Example:
+{"question_id": "q-003", "question": "Kapan Statuta UPI ditetapkan?", "full_response": "Statuta UPI ditetapkan tahun 2014. Statuta tersebut direvisi total pada tahun 2018.", "sentence_id": 1, "sentence_text": "Statuta tersebut direvisi total pada tahun 2018.", "retrieved_context": "Statuta UPI ditetapkan melalui Peraturan Pemerintah Nomor 15 Tahun 2014.", "label": "not_supported", "verifier_note": "Revisi 2018 tidak ada dalam konteks — halusinasi"}
+
+## No Source Needed
+Generate response sentences that don't require source verification (e.g.,
+acknowledgments, transitions, general knowledge).
+
+Example:
+{"question_id": "q-004", "question": "Apa itu Statuta UPI?", "full_response": "Terima kasih atas pertanyaan Anda. Statuta UPI adalah peraturan dasar penyelenggaraan universitas. Semoga penjelasan ini membantu.", "sentence_id": 0, "sentence_text": "Terima kasih atas pertanyaan Anda.", "retrieved_context": "Statuta UPI adalah peraturan dasar penyelenggaraan universitas.", "label": "no_source_needed", "verifier_note": "Sapaan — tidak perlu verifikasi"}

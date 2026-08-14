@@ -1,0 +1,74 @@
+{
+  "dataset_version": "v2",
+  "audit": "combined_subset_a_d_blind_human_audit",
+  "generated_at_utc": "2026-07-29T12:12:39.746671+00:00",
+  "seed": 42,
+  "source_files": {
+    "a": "data/v2/subset_a.csv",
+    "b": "data/v2/subset_b.csv",
+    "c": "data/v2/subset_c.csv",
+    "d": "data/v2/subset_d.csv"
+  },
+  "source_sha256": {
+    "a": "1469c0fdf3b8e2e6531d979a963626031d80c4107273ff008e3ff5896324f36e",
+    "b": "a2feb9ac5e2528ba5134e59c5d8c29b371afa02c4184a8ecbdbe8c21128a189c",
+    "c": "9cc39e4db12ab4a8bc67d6b59d364f3a81f8aad67468a42e6ff602033114a043",
+    "d": "2c658c0e3d469f2225fc42a00f98a0dbe86191c50f8b51c6c236c7a3f87be5a6"
+  },
+  "source_populations": {
+    "a": 150,
+    "b": 160,
+    "c": 200,
+    "d": 210
+  },
+  "authentic_sample_counts": {
+    "a": 30,
+    "b": 32,
+    "c": 40,
+    "d": 42
+  },
+  "qc_control_counts": {
+    "a": 6,
+    "b": 6,
+    "c": 8,
+    "d": 9
+  },
+  "total_authentic": 144,
+  "total_qc": 29,
+  "total_review_items": 173,
+  "authentic_class_counts": {
+    "a": {
+      "valid": 30
+    },
+    "b": {
+      "malicious": 16,
+      "safe": 16
+    },
+    "c": {
+      "out_of_domain": 20,
+      "in_domain": 20
+    },
+    "d": {
+      "contradiction": 10,
+      "entailment": 17,
+      "neutral": 15
+    }
+  },
+  "sampling": {
+    "a": "20% by generation category",
+    "b": "20% by label and attack type",
+    "c": "20% by label, subtype, and split",
+    "d": "label and split targets, then proportional construction and consensus"
+  },
+  "qc_policy": {
+    "a": "five answer swaps plus one false-OOD triplet",
+    "b": "six balanced hidden label flips",
+    "c": "eight balanced hidden label flips",
+    "d": "nine hidden label flips, three per NLI class",
+    "interpretation": "Controlled QC variants are not genuine panel-rejected v2 rows and must be reported separately."
+  },
+  "config_sha256": "befdb74fac8b0fdfc92c5cbe4f66270f82614524ad24d318a0840088e6764bb2",
+  "review_queue": "data/v2/blind_check_ad_v2.csv",
+  "sealed_key": "data/v2/blind_check_ad_v2.key.csv",
+  "browser_test": "tools/blind_test_ad_v2.html"
+}

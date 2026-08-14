@@ -1,0 +1,763 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Blind Injection Review</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #f5f5f5;
+        color: #333;
+      }
+      .container {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      h1 {
+        font-size: 1.4rem;
+        margin-bottom: 4px;
+      }
+      .subtitle {
+        color: #666;
+        font-size: 0.85rem;
+        margin-bottom: 20px;
+      }
+      .upload-area {
+        border: 2px dashed #ccc;
+        border-radius: 8px;
+        padding: 40px;
+        text-align: center;
+        background: #fff;
+        cursor: pointer;
+        transition: border-color 0.2s;
+      }
+      .upload-area:hover {
+        border-color: #4a90d9;
+      }
+      .upload-area.dragover {
+        border-color: #4a90d9;
+        background: #f0f7ff;
+      }
+      .upload-area input {
+        display: none;
+      }
+      .upload-area p {
+        color: #888;
+        margin-top: 8px;
+        font-size: 0.9rem;
+      }
+      .progress-wrap {
+        background: #e0e0e0;
+        border-radius: 4px;
+        height: 8px;
+        margin: 16px 0 8px;
+        overflow: hidden;
+      }
+      .progress-bar {
+        height: 100%;
+        background: #4a90d9;
+        transition: width 0.3s;
+        border-radius: 4px;
+      }
+      .progress-text {
+        font-size: 0.8rem;
+        color: #666;
+        display: flex;
+        justify-content: space-between;
+      }
+      .dashboard {
+        display: flex;
+        gap: 12px;
+        margin: 16px 0;
+        flex-wrap: wrap;
+      }
+      .stat {
+        background: #fff;
+        border-radius: 6px;
+        padding: 12px 16px;
+        flex: 1;
+        min-width: 100px;
+        text-align: center;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+      }
+      .stat .num {
+        font-size: 1.5rem;
+        font-weight: 700;
+      }
+      .stat .lbl {
+        font-size: 0.75rem;
+        color: #888;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .stat.agree .num {
+        color: #2e7d32;
+      }
+      .stat.disagree .num {
+        color: #c62828;
+      }
+      .stat.skip .num {
+        color: #f57c00;
+      }
+      .stat.concordance .num {
+        color: #1565c0;
+      }
+      .stat.concordance.pass .num {
+        color: #2e7d32;
+      }
+      .stat.concordance.fail .num {
+        color: #c62828;
+      }
+      .card {
+        background: #fff;
+        border-radius: 8px;
+        padding: 20px;
+        margin: 16px 0;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+      }
+      .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+      .card-header .idx {
+        font-size: 0.85rem;
+        color: #888;
+      }
+      .judgment-badge {
+        font-size: 0.75rem;
+        padding: 3px 10px;
+        border-radius: 12px;
+        font-weight: 600;
+      }
+      .judgment-badge.agree {
+        background: #e8f5e9;
+        color: #2e7d32;
+      }
+      .judgment-badge.disagree {
+        background: #ffebee;
+        color: #c62828;
+      }
+      .judgment-badge.skip {
+        background: #fff3e0;
+        color: #f57c00;
+      }
+      .field {
+        margin-bottom: 14px;
+      }
+      .field-label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #888;
+        margin-bottom: 4px;
+      }
+      .field-value {
+        font-size: 0.95rem;
+        line-height: 1.5;
+        padding: 8px 12px;
+        background: #fafafa;
+        border-radius: 4px;
+        border: 1px solid #eee;
+      }
+      .field-value.long {
+        max-height: 200px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 0.88rem;
+      }
+      .field-value.short {
+        display: inline-block;
+      }
+      .fields-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      .fields-grid .field.full {
+        grid-column: 1 / -1;
+      }
+      .actions {
+        display: flex;
+        gap: 12px;
+        justify-content: center;
+        margin: 20px 0;
+      }
+      .btn {
+        padding: 12px 28px;
+        border: none;
+        border-radius: 6px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.1s;
+      }
+      .btn:active {
+        transform: scale(0.96);
+      }
+      .btn-agree {
+        background: #2e7d32;
+        color: #fff;
+      }
+      .btn-agree:hover {
+        background: #1b5e20;
+      }
+      .btn-disagree {
+        background: #c62828;
+        color: #fff;
+      }
+      .btn-disagree:hover {
+        background: #b71c1c;
+      }
+      .btn-skip {
+        background: #f57c00;
+        color: #fff;
+      }
+      .btn-skip:hover {
+        background: #e65100;
+      }
+      .nav {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: 12px 0;
+      }
+      .nav button {
+        padding: 8px 16px;
+        border: 1px solid #ccc;
+        background: #fff;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.85rem;
+      }
+      .nav button:hover {
+        background: #f0f0f0;
+      }
+      .nav button:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      .nav .page-info {
+        font-size: 0.85rem;
+        color: #666;
+      }
+      .export-section {
+        text-align: center;
+        margin: 24px 0;
+      }
+      .btn-export {
+        background: #1565c0;
+        color: #fff;
+        padding: 12px 32px;
+        border: none;
+        border-radius: 6px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .btn-export:hover {
+        background: #0d47a1;
+      }
+      .filter-bar {
+        display: flex;
+        gap: 8px;
+        margin: 12px 0;
+        flex-wrap: wrap;
+      }
+      .filter-btn {
+        padding: 6px 14px;
+        border: 1px solid #ccc;
+        background: #fff;
+        border-radius: 16px;
+        cursor: pointer;
+        font-size: 0.8rem;
+      }
+      .filter-btn.active {
+        background: #4a90d9;
+        color: #fff;
+        border-color: #4a90d9;
+      }
+      .kbd-hints {
+        text-align: center;
+        font-size: 0.75rem;
+        color: #aaa;
+        margin-top: 12px;
+      }
+      .kbd-hints kbd {
+        background: #eee;
+        padding: 2px 6px;
+        border-radius: 3px;
+        border: 1px solid #ddd;
+      }
+      .file-info {
+        font-size: 0.8rem;
+        color: #666;
+        margin: 8px 0;
+      }
+      .file-info strong {
+        color: #333;
+      }
+      .btn-reset {
+        background: none;
+        border: 1px solid #ccc;
+        color: #888;
+        padding: 6px 14px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.8rem;
+        margin-bottom: 8px;
+      }
+      .btn-reset:hover {
+        border-color: #c62828;
+        color: #c62828;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🔍 Blind Injection Review</h1>
+      <p class="subtitle">
+        Manual concordance checking — target ≥ 95% agreement with panel labels
+      </p>
+
+      <div id="upload-section">
+        <div class="upload-area" id="drop-zone">
+          <strong>Drop a blind-injection CSV here or click to browse</strong>
+          <p>Supports subset_a/b/c/d_blind_injection.csv</p>
+          <input type="file" id="file-input" accept=".csv" />
+        </div>
+      </div>
+
+      <div id="review-section" style="display: none">
+        <div class="file-info">
+          File: <strong id="filename"></strong> —
+          <span id="row-count"></span> rows
+        </div>
+        <button class="btn-reset" id="btn-reset">↺ Load different file</button>
+
+        <div class="progress-wrap">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+        <div class="progress-text">
+          <span id="progress-reviewed"></span><span id="progress-pct"></span>
+        </div>
+
+        <div class="dashboard">
+          <div class="stat agree">
+            <div class="num" id="stat-agree">0</div>
+            <div class="lbl">Agree</div>
+          </div>
+          <div class="stat disagree">
+            <div class="num" id="stat-disagree">0</div>
+            <div class="lbl">Disagree</div>
+          </div>
+          <div class="stat skip">
+            <div class="num" id="stat-skip">0</div>
+            <div class="lbl">Skip</div>
+          </div>
+          <div class="stat concordance" id="stat-concordance">
+            <div class="num" id="stat-conc">—</div>
+            <div class="lbl">Concordance</div>
+          </div>
+        </div>
+
+        <div class="filter-bar">
+          <button class="filter-btn active" data-filter="all">All</button>
+          <button class="filter-btn" data-filter="unreviewed">
+            Unreviewed
+          </button>
+          <button class="filter-btn" data-filter="agree">Agree</button>
+          <button class="filter-btn" data-filter="disagree">Disagree</button>
+          <button class="filter-btn" data-filter="skip">Skip</button>
+        </div>
+
+        <div class="card" id="card">
+          <div class="card-header">
+            <span class="idx" id="card-idx"></span>
+            <span
+              class="judgment-badge"
+              id="card-badge"
+              style="display: none"
+            ></span>
+          </div>
+          <div id="card-fields"></div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-agree" id="btn-agree">✓ Agree</button>
+          <button class="btn btn-disagree" id="btn-disagree">✗ Disagree</button>
+          <button class="btn btn-skip" id="btn-skip">⏭ Skip</button>
+        </div>
+
+        <div class="nav">
+          <button id="btn-prev">← Prev</button>
+          <span class="page-info" id="page-info"></span>
+          <button id="btn-next">Next →</button>
+        </div>
+
+        <div class="kbd-hints">
+          <kbd>A</kbd> agree &nbsp; <kbd>D</kbd> disagree &nbsp;
+          <kbd>S</kbd> skip &nbsp; <kbd>←</kbd> prev &nbsp; <kbd>→</kbd> next
+        </div>
+
+        <div class="export-section">
+          <button class="btn-export" id="btn-export">
+            ⬇ Export Annotated CSV
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        let headers = [],
+          rows = [],
+          judgments = [],
+          currentIdx = 0,
+          filter = "all",
+          fileName = "";
+        const LONG_COLS = new Set([
+          "source_context",
+          "full_response",
+          "retrieved_context",
+          "sentence_text",
+          "ground_truth_answer",
+          "question",
+          "query",
+          "verifier_note",
+        ]);
+
+        const uploadSection = document.getElementById("upload-section");
+        const reviewSection = document.getElementById("review-section");
+        const dropZone = document.getElementById("drop-zone");
+        const fileInput = document.getElementById("file-input");
+
+        function parseCSV(text) {
+          const result = [];
+          let current = "",
+            inQuotes = false,
+            row = [];
+          for (let i = 0; i < text.length; i++) {
+            const ch = text[i];
+            if (inQuotes) {
+              if (ch === '"') {
+                if (i + 1 < text.length && text[i + 1] === '"') {
+                  current += '"';
+                  i++;
+                } else inQuotes = false;
+              } else current += ch;
+            } else {
+              if (ch === '"') inQuotes = true;
+              else if (ch === ",") {
+                row.push(current);
+                current = "";
+              } else if (ch === "\n") {
+                row.push(current);
+                current = "";
+                result.push(row);
+                row = [];
+              } else if (ch !== "\r") current += ch;
+            }
+          }
+          if (current || row.length) {
+            row.push(current);
+            result.push(row);
+          }
+          return result;
+        }
+
+        function loadCSV(text, name) {
+          const parsed = parseCSV(text);
+          if (parsed.length < 2) {
+            alert("CSV appears empty or has no data rows.");
+            return;
+          }
+          headers = parsed[0];
+          rows = parsed
+            .slice(1)
+            .filter((r) => r.some((c) => c.trim() !== ""))
+            .map((r) => {
+              const obj = {};
+              headers.forEach((h, i) => (obj[h] = r[i] || ""));
+              return obj;
+            });
+          judgments = new Array(rows.length).fill("");
+          fileName = name;
+          currentIdx = 0;
+          filter = "all";
+          loadState();
+          showReview();
+        }
+
+        function storageKey() {
+          return "blind_review_" + fileName;
+        }
+        function saveState() {
+          try {
+            localStorage.setItem(
+              storageKey(),
+              JSON.stringify({ judgments, currentIdx }),
+            );
+          } catch (e) {}
+        }
+        function loadState() {
+          try {
+            const s = JSON.parse(localStorage.getItem(storageKey()));
+            if (s && s.judgments && s.judgments.length === rows.length) {
+              judgments = s.judgments;
+              currentIdx = s.currentIdx || 0;
+            }
+          } catch (e) {}
+        }
+
+        function showReview() {
+          uploadSection.style.display = "none";
+          reviewSection.style.display = "block";
+          document.getElementById("filename").textContent = fileName;
+          document.getElementById("row-count").textContent = rows.length;
+          render();
+        }
+
+        function getFilteredIndices() {
+          const idx = [];
+          for (let i = 0; i < rows.length; i++) {
+            if (filter === "all") idx.push(i);
+            else if (filter === "unreviewed" && judgments[i] === "")
+              idx.push(i);
+            else if (judgments[i] === filter) idx.push(i);
+          }
+          return idx;
+        }
+
+        function render() {
+          const filtered = getFilteredIndices();
+          if (!filtered.length) {
+            document.getElementById("card-fields").innerHTML =
+              '<p style="color:#888;text-align:center;padding:20px;">No items match this filter.</p>';
+            document.getElementById("card-idx").textContent = "";
+            document.getElementById("card-badge").style.display = "none";
+            document.getElementById("page-info").textContent = "0 / 0";
+            updateStats();
+            return;
+          }
+          if (currentIdx >= filtered.length) currentIdx = filtered.length - 1;
+          if (currentIdx < 0) currentIdx = 0;
+          const realIdx = filtered[currentIdx],
+            row = rows[realIdx],
+            j = judgments[realIdx];
+
+          document.getElementById("card-idx").textContent =
+            `Row ${realIdx + 1} of ${rows.length}`;
+          const badge = document.getElementById("card-badge");
+          if (j) {
+            badge.style.display = "inline-block";
+            badge.textContent = j.toUpperCase();
+            badge.className = "judgment-badge " + j;
+          } else badge.style.display = "none";
+
+          const container = document.getElementById("card-fields");
+          container.innerHTML = "";
+          const longFields = headers.filter(
+            (h) => LONG_COLS.has(h) && row[h] && row[h].length > 60,
+          );
+          const shortFields = headers.filter(
+            (h) => !LONG_COLS.has(h) || !row[h] || row[h].length <= 60,
+          );
+
+          if (shortFields.length) {
+            const grid = document.createElement("div");
+            grid.className = "fields-grid";
+            shortFields.forEach((h) => {
+              const d = document.createElement("div");
+              d.className = "field";
+              d.innerHTML = `<div class="field-label">${esc(h)}</div><div class="field-value short">${esc(row[h])}</div>`;
+              grid.appendChild(d);
+            });
+            container.appendChild(grid);
+          }
+          longFields.forEach((h) => {
+            const d = document.createElement("div");
+            d.className = "field full";
+            d.innerHTML = `<div class="field-label">${esc(h)}</div><div class="field-value long">${esc(row[h])}</div>`;
+            container.appendChild(d);
+          });
+
+          document.getElementById("page-info").textContent =
+            `${currentIdx + 1} / ${filtered.length}`;
+          document.getElementById("btn-prev").disabled = currentIdx <= 0;
+          document.getElementById("btn-next").disabled =
+            currentIdx >= filtered.length - 1;
+          updateStats();
+        }
+
+        function updateStats() {
+          const agree = judgments.filter((j) => j === "agree").length,
+            disagree = judgments.filter((j) => j === "disagree").length,
+            skip = judgments.filter((j) => j === "skip").length;
+          const reviewed = agree + disagree,
+            conc = reviewed > 0 ? ((agree / reviewed) * 100).toFixed(1) : "—";
+          document.getElementById("stat-agree").textContent = agree;
+          document.getElementById("stat-disagree").textContent = disagree;
+          document.getElementById("stat-skip").textContent = skip;
+          document.getElementById("stat-conc").textContent =
+            conc === "—" ? "—" : conc + "%";
+          const cs = document.getElementById("stat-concordance");
+          cs.classList.remove("pass", "fail");
+          if (conc !== "—")
+            cs.classList.add(parseFloat(conc) >= 95 ? "pass" : "fail");
+          const done = agree + disagree + skip;
+          document.getElementById("progress-bar").style.width =
+            (done / rows.length) * 100 + "%";
+          document.getElementById("progress-reviewed").textContent =
+            `${done} / ${rows.length} reviewed`;
+          document.getElementById("progress-pct").textContent =
+            Math.round((done / rows.length) * 100) + "%";
+        }
+
+        function setJudgment(val) {
+          const filtered = getFilteredIndices();
+          if (!filtered.length) return;
+          judgments[filtered[currentIdx]] = val;
+          saveState();
+          if (currentIdx < filtered.length - 1) currentIdx++;
+          render();
+        }
+
+        function esc(s) {
+          const d = document.createElement("div");
+          d.textContent = s;
+          return d.innerHTML;
+        }
+
+        function csvEscape(v) {
+          const s = String(v || "");
+          return s.includes(",") || s.includes('"') || s.includes("\n")
+            ? '"' + s.replace(/"/g, '""') + '"'
+            : s;
+        }
+
+        function exportCSV() {
+          const lines = [
+            [...headers, "human_judgment"].map(csvEscape).join(","),
+          ];
+          rows.forEach((row, i) => {
+            lines.push(
+              [
+                ...headers.map((h) => csvEscape(row[h])),
+                csvEscape(judgments[i]),
+              ].join(","),
+            );
+          });
+          const blob = new Blob([lines.join("\n")], {
+            type: "text/csv;charset=utf-8;",
+          });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = fileName.replace(".csv", ".reviewed.csv");
+          a.click();
+          URL.revokeObjectURL(a.href);
+        }
+
+        // Events
+        dropZone.addEventListener("click", () => fileInput.click());
+        dropZone.addEventListener("dragover", (e) => {
+          e.preventDefault();
+          dropZone.classList.add("dragover");
+        });
+        dropZone.addEventListener("dragleave", () =>
+          dropZone.classList.remove("dragover"),
+        );
+        dropZone.addEventListener("drop", (e) => {
+          e.preventDefault();
+          dropZone.classList.remove("dragover");
+          if (e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener("change", () => {
+          if (fileInput.files[0]) readFile(fileInput.files[0]);
+        });
+        function readFile(f) {
+          const r = new FileReader();
+          r.onload = () => loadCSV(r.result, f.name);
+          r.readAsText(f);
+        }
+
+        document
+          .getElementById("btn-agree")
+          .addEventListener("click", () => setJudgment("agree"));
+        document
+          .getElementById("btn-disagree")
+          .addEventListener("click", () => setJudgment("disagree"));
+        document
+          .getElementById("btn-skip")
+          .addEventListener("click", () => setJudgment("skip"));
+        document.getElementById("btn-prev").addEventListener("click", () => {
+          currentIdx--;
+          render();
+        });
+        document.getElementById("btn-next").addEventListener("click", () => {
+          currentIdx++;
+          render();
+        });
+        document
+          .getElementById("btn-export")
+          .addEventListener("click", exportCSV);
+        document.getElementById("btn-reset").addEventListener("click", () => {
+          reviewSection.style.display = "none";
+          uploadSection.style.display = "block";
+          fileInput.value = "";
+        });
+
+        document.querySelectorAll(".filter-btn").forEach((btn) =>
+          btn.addEventListener("click", () => {
+            document
+              .querySelectorAll(".filter-btn")
+              .forEach((b) => b.classList.remove("active"));
+            btn.classList.add("active");
+            filter = btn.dataset.filter;
+            currentIdx = 0;
+            render();
+          }),
+        );
+
+        document.addEventListener("keydown", (e) => {
+          if (
+            reviewSection.style.display === "none" ||
+            e.target.tagName === "INPUT" ||
+            e.target.tagName === "TEXTAREA"
+          )
+            return;
+          switch (e.key.toLowerCase()) {
+            case "a":
+              setJudgment("agree");
+              break;
+            case "d":
+              setJudgment("disagree");
+              break;
+            case "s":
+              setJudgment("skip");
+              break;
+            case "arrowleft":
+              currentIdx--;
+              render();
+              break;
+            case "arrowright":
+              currentIdx++;
+              render();
+              break;
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

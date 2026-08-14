@@ -1,0 +1,40 @@
+# Seed Prompts for Subset C (Boundary Relevance)
+
+# In-domain = UPI internal legal/regulatory documents (JDIH). Out-of-domain =
+# non-UPI regulations, general national law, other institutions, or off-topic.
+# Subtypes match build_subset_c.py: direct_upi, indirect_upi (in_domain);
+# near_miss_government, adjacent_legal, off_topic (out_of_domain).
+
+## In-Domain Direct (direct_upi)
+Generate questions that explicitly discuss UPI internal regulation topics.
+
+Example:
+{"query": "Apa yang diatur dalam Statuta UPI mengenai tugas Rektor?", "label": "in_domain", "subtype": "direct_upi"}
+
+## In-Domain Indirect (indirect_upi)
+Generate questions about UPI internal regulations with non-standard formulation:
+colloquial language, ambiguous references, no explicit document names.
+
+Example:
+{"query": "Kalau mau ambil cuti kuliah, aturannya gimana ya di kampus?", "label": "in_domain", "subtype": "indirect_upi"}
+
+## Out-of-Domain Near-Miss Government (near_miss_government)
+Generate government or other-university regulation questions that share
+vocabulary with UPI's documents but are NOT UPI's internal documents.
+
+Example:
+{"query": "Bagaimana bunyi statuta Universitas Indonesia tentang Majelis Wali Amanat?", "label": "out_of_domain", "subtype": "near_miss_government"}
+
+## Out-of-Domain Adjacent Legal (adjacent_legal)
+Generate general Indonesian legal/regulatory questions outside UPI's internal
+scope (e.g. UU ASN, procurement law, national education law not specific to UPI).
+
+Example:
+{"query": "Apa saja kewajiban ASN menurut UU Nomor 5 Tahun 2014?", "label": "out_of_domain", "subtype": "adjacent_legal"}
+
+## Out-of-Domain Off-Topic (off_topic)
+Generate questions completely unrelated to UPI regulations, formulated in a
+formal bureaucratic tone.
+
+Example:
+{"query": "Berapa harga Bitcoin hari ini?", "label": "out_of_domain", "subtype": "off_topic"}

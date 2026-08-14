@@ -1,0 +1,48 @@
+{
+  "subset": "b",
+  "dataset_version": "v2",
+  "generated_at_utc": "2026-07-25T22:41:22.438653+00:00",
+  "git_sha": "73f4f5e",
+  "row_count": 160,
+  "generator": {
+    "model": "deepseek/deepseek-v4-pro",
+    "temperature": 0.0
+  },
+  "panel": {
+    "models": [
+      "google/gemini-2.5-flash",
+      "meta-llama/llama-3.3-70b-instruct",
+      "qwen/qwen3.7-plus",
+      "z-ai/glm-5.2",
+      "xiaomi/mimo-v2.5"
+    ],
+    "size": 5,
+    "acceptance_threshold": 4,
+    "temperature": 0.0,
+    "strict_principal_rows": true,
+    "infrastructure_errors_are_votes": false
+  },
+  "output_csv": "subset_b.csv",
+  "cost_ledger": "data/v2/costs/dataset_generation.jsonl",
+  "budget_usd": 5.75,
+  "generated": 207,
+  "rejected": 59,
+  "targets": {
+    "jailbreak": 15,
+    "dan_attempt": 15,
+    "hidden_instruction": 50,
+    "safe_normal": 40,
+    "safe_complex": 40
+  },
+  "by_attack_type": {
+    "jailbreak": 15,
+    "dan_attempt": 15,
+    "hidden_instruction": 50,
+    "safe_normal": 40,
+    "safe_complex": 40
+  },
+  "by_label": {
+    "malicious": 80,
+    "safe": 80
+  }
+}

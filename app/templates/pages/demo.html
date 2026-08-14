@@ -1,0 +1,212 @@
+{% extends "base.html" %} {% block title %}Perbandingan Pencarian - {{ super() }}{% endblock %} {%
+block layout %} {% include "components/sidebar.html" %}
+
+<!-- Comparison demo: naive title search vs. RAG chatbot -->
+<main x-data="demoCompare()" class="flex-1 flex flex-col h-full bg-white dark:bg-darkbg relative min-w-0 overflow-y-auto">
+  <header class="px-4 md:px-8 pt-6 pb-4 max-w-5xl mx-auto w-full shrink-0">
+    <h1 class="text-xl font-semibold text-slate-900 dark:text-gray-100">
+      Pencarian judul saja vs. Chatbot RAG
+    </h1>
+    <p class="mt-1 text-sm text-slate-500 dark:text-gray-400">
+      Bandingkan pencarian JDIH berbasis judul (seperti
+      <a href="https://jdih.upi.edu/" target="_blank" rel="noopener" class="underline hover:text-slate-700 dark:hover:text-gray-200">jdih.upi.edu</a>)
+      dengan jawaban chatbot yang digroundkan pada dokumen yang sama.
+    </p>
+
+    <form @submit.prevent="runComparison" class="mt-4 flex gap-2">
+      <input
+        type="text"
+        x-model="query"
+        :disabled="isRunning"
+        placeholder="Contoh: aturan motor kehilangan di parkiran"
+        class="flex-1 rounded-xl border border-slate-200 dark:border-darkborder bg-white dark:bg-darkinput px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-slate-300 dark:focus:ring-[#444] dark:text-gray-100 placeholder-slate-400 dark:placeholder-gray-400"
+        required
+      />
+      <button
+        type="submit"
+        :disabled="isRunning || query.trim() === ''"
+        class="px-5 py-2.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-black text-sm font-medium hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
+      >
+        <span x-show="!isRunning">Bandingkan</span>
+        <span x-show="isRunning">Mencari...</span>
+      </button>
+    </form>
+
+    <div class="mt-3 flex flex-wrap gap-2">
+      <template x-for="chip in suggestedQueries" :key="chip">
+        <button
+          type="button"
+          @click="query = chip; runComparison();"
+          :disabled="isRunning"
+          class="text-xs px-3 py-1.5 rounded-full bg-slate-100 dark:bg-[#2a2a2a] text-slate-600 dark:text-gray-300 hover:bg-slate-200 dark:hover:bg-[#333] transition-colors disabled:opacity-50"
+          x-text="chip"
+        ></button>
+      </template>
+    </div>
+  </header>
+
+  <div class="flex-1 px-4 md:px-8 pb-8 max-w-5xl mx-auto w-full grid grid-cols-1 md:grid-cols-2 gap-4">
+    <!-- Left: naive title-only search -->
+    <section class="border border-slate-200 dark:border-darkborder rounded-xl flex flex-col min-h-[320px]">
+      <div class="px-4 py-3 border-b border-slate-200 dark:border-darkborder">
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-gray-100">Pencarian JDIH (judul saja)</h2>
+        <p class="text-xs text-slate-500 dark:text-gray-400 mt-0.5">Cocok kata demi kata, sensitif urutan kata — seperti portal JDIH pada umumnya.</p>
+      </div>
+      <div class="p-4 flex-1 overflow-y-auto">
+        <template x-if="!hasSearched">
+          <p class="text-sm text-slate-400 dark:text-gray-500">Ketik pertanyaan lalu klik "Bandingkan".</p>
+        </template>
+        <template x-if="hasSearched && naiveLoading">
+          <p class="text-sm text-slate-400 dark:text-gray-500">Mencari judul yang cocok...</p>
+        </template>
+        <template x-if="hasSearched && !naiveLoading && naiveResults.length === 0">
+          <p class="text-sm text-red-600 dark:text-red-400">
+            Tidak ditemukan dokumen dengan judul yang cocok persis dengan kata kunci ini.
+          </p>
+        </template>
+        <template x-if="hasSearched && !naiveLoading && naiveResults.length > 0">
+          <ul class="space-y-2">
+            <template x-for="doc in naiveResults" :key="doc.id">
+              <li class="text-sm text-slate-700 dark:text-gray-300 border border-slate-100 dark:border-[#2a2a2a] rounded-lg px-3 py-2" x-text="doc.title"></li>
+            </template>
+          </ul>
+        </template>
+      </div>
+    </section>
+
+    <!-- Right: RAG chatbot answer -->
+    <section class="border border-slate-200 dark:border-darkborder rounded-xl flex flex-col min-h-[320px]">
+      <div class="px-4 py-3 border-b border-slate-200 dark:border-darkborder">
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-gray-100">Chatbot (RAG)</h2>
+        <p class="text-xs text-slate-500 dark:text-gray-400 mt-0.5">Jawaban langsung, digroundkan pada isi dokumen dengan sitasi.</p>
+      </div>
+      <div class="p-4 flex-1 overflow-y-auto">
+        <template x-if="!hasSearched">
+          <p class="text-sm text-slate-400 dark:text-gray-500">Jawaban chatbot akan muncul di sini.</p>
+        </template>
+        <template x-if="hasSearched && chatAnswer === '' && chatLoading">
+          <p class="text-sm text-slate-400 dark:text-gray-500">Menyusun jawaban...</p>
+        </template>
+        <template x-if="hasSearched && chatError">
+          <p class="text-sm text-red-600 dark:text-red-400" x-text="chatError"></p>
+        </template>
+        <template x-if="hasSearched && chatAnswer !== ''">
+          <div
+            class="prose prose-sm prose-slate dark:prose-invert max-w-none break-words text-slate-900 dark:text-gray-200"
+            x-html="renderMessage(chatAnswer)"
+          ></div>
+        </template>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+  document.addEventListener("alpine:init", () => {
+    Alpine.data("demoCompare", () => ({
+      query: "",
+      suggestedQueries: [
+        "aturan motor kehilangan di parkiran",
+        // TODO: replace with real questions grounded in your ingested
+        // corpus before the defense (entity questions like "apa itu PT X"
+        // work well to show off retrieval + synthesis).
+      ],
+      isRunning: false,
+      hasSearched: false,
+      naiveLoading: false,
+      naiveResults: [],
+      chatLoading: false,
+      chatAnswer: "",
+      chatError: "",
+
+      async runComparison() {
+        const q = this.query.trim();
+        if (!q || this.isRunning) return;
+
+        this.isRunning = true;
+        this.hasSearched = true;
+        this.naiveResults = [];
+        this.chatAnswer = "";
+        this.chatError = "";
+
+        await Promise.all([this.runNaiveSearch(q), this.runChat(q)]);
+
+        this.isRunning = false;
+      },
+
+      async runNaiveSearch(q) {
+        this.naiveLoading = true;
+        try {
+          const res = await fetch(`/api/kb/naive-search?q=${encodeURIComponent(q)}`);
+          if (!res.ok) throw new Error("Network error");
+          this.naiveResults = await res.json();
+        } catch (e) {
+          console.error(e);
+          this.naiveResults = [];
+        } finally {
+          this.naiveLoading = false;
+        }
+      },
+
+      async runChat(q) {
+        this.chatLoading = true;
+        try {
+          const sessionRes = await fetch("/api/chat/sessions", { method: "POST" });
+          const session = await sessionRes.json();
+
+          const response = await fetch(`/api/chat/sessions/${session.id}/stream`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: q }),
+          });
+          if (!response.ok) throw new Error("Network error");
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let ndjsonBuffer = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            ndjsonBuffer += decoder.decode(value, { stream: true });
+            const lines = ndjsonBuffer.split("\n");
+            ndjsonBuffer = lines.pop();
+
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              let evt;
+              try {
+                evt = JSON.parse(line);
+              } catch (e) {
+                continue;
+              }
+              if (evt.type === "chunk") {
+                this.chatAnswer += evt.content;
+              } else if (evt.type === "error") {
+                this.chatError = evt.content;
+              }
+            }
+          }
+        } catch (e) {
+          console.error(e);
+          this.chatError = "Gagal mengambil jawaban chatbot.";
+        } finally {
+          this.chatLoading = false;
+        }
+      },
+
+      renderMessage(content) {
+        if (!content) return "";
+        // Strip RAM citation markers for this simplified demo view — the
+        // main chat page (index.html) renders them as interactive badges;
+        // here we only need the plain grounded answer text.
+        const stripped = content.replace(
+          /\s*\*\((Supported|Contradiction|Neutral):[^)]*\)\*/g,
+          "",
+        );
+        const html = marked.parse(stripped, { breaks: true });
+        return DOMPurify.sanitize(html);
+      },
+    }));
+  });
+</script>
+{% endblock %}

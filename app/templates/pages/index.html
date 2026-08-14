@@ -1,0 +1,442 @@
+{% extends "base.html" %} {% block title %}Chat - {{ super() }}{% endblock %} {%
+block layout %} {% include "components/sidebar.html" %}
+
+<!-- Main Chat Area -->
+<main
+  x-data="chatInterface()"
+  class="flex-1 flex flex-col h-full bg-white dark:bg-darkbg relative min-w-0"
+>
+  <!-- Header -->
+  <header
+    class="h-14 flex items-center justify-between px-4 sticky top-0 z-10 text-sm font-medium"
+  >
+    <div class="truncate text-slate-500 dark:text-gray-400" x-text="title">
+      Mock LLM
+    </div>
+  </header>
+
+  <!-- Messages -->
+  <div
+    id="chat-messages"
+    class="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 scroll-smooth"
+  >
+    <template x-if="messages.length === 0">
+      {% include "components/empty_state.html" %}
+    </template>
+
+    <template x-for="(msg, index) in messages" :key="index">
+      <div
+        :class="['flex gap-4 max-w-3xl mx-auto w-full', msg.role === 'user' ? 'flex-row-reverse' : '']"
+      >
+        <!-- Avatar -->
+        <div
+          :class="['w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-1', msg.role === 'user' ? 'bg-slate-200 dark:bg-[#2f2f2f] text-slate-600 dark:text-gray-300' : 'bg-brand text-white']"
+        >
+          <template x-if="msg.role === 'user'">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="h-5 w-5"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </template>
+          <template x-if="msg.role === 'assistant'">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="h-5 w-5"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z"
+              />
+            </svg>
+          </template>
+        </div>
+
+        <!-- Content Bubble -->
+        <div
+          :class="['max-w-[calc(100%-3rem)] flex-1', msg.role === 'user' ? 'flex flex-col items-end' : '']"
+        >
+          <!-- User Message -->
+          <template x-if="msg.role === 'user'">
+            <div class="flex flex-col items-end gap-1">
+              <div
+                x-show="msg.attachment_filename"
+                class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-gray-400"
+              >
+                <span>📎</span>
+                <span x-text="msg.attachment_filename"></span>
+              </div>
+              <div
+                class="whitespace-pre-wrap break-words leading-relaxed bg-slate-200 dark:bg-[#2f2f2f] text-slate-900 dark:text-gray-100 px-4 py-2.5 rounded-2xl rounded-tr-md"
+                x-text="msg.content"
+              ></div>
+            </div>
+          </template>
+
+          <!-- RAG context (collapsed by default, like a "thinking" panel) -->
+          <template x-if="msg.role === 'assistant' && msg.context">
+            <details
+              class="mb-1.5 text-xs text-slate-500 dark:text-gray-400 border border-slate-200 dark:border-[#3a3a3a] rounded-lg"
+            >
+              <summary
+                class="cursor-pointer select-none px-2.5 py-1.5 hover:text-slate-700 dark:hover:text-gray-200"
+              >
+                Lihat konteks RAG
+              </summary>
+              <div
+                class="px-2.5 pb-2 pt-1 border-t border-slate-200 dark:border-[#3a3a3a] max-h-64 overflow-y-auto space-y-2"
+              >
+                <template x-for="(src, i) in msg.sources || []" :key="i">
+                  <div class="border border-slate-100 dark:border-[#2a2a2a] rounded-md px-2 py-1.5">
+                    <div class="font-medium text-slate-600 dark:text-gray-300">
+                      <span x-text="src.title || 'Unknown'"></span>
+                      <span x-show="src.page" x-text="' — Halaman ' + src.page"></span>
+                      <span
+                        x-show="src.breadcrumbs && src.breadcrumbs.length"
+                        x-text="' (' + (src.breadcrumbs || []).join(' > ') + ')'"
+                      ></span>
+                    </div>
+                    <div
+                      x-show="src.text"
+                      class="mt-1 prose prose-sm prose-slate dark:prose-invert max-w-none whitespace-pre-wrap break-words"
+                      x-html="renderMessage(src.text, index + '-ctx-' + i)"
+                    ></div>
+                  </div>
+                </template>
+              </div>
+            </details>
+          </template>
+
+          <!-- Guardrail abstention: an intentional refusal, not a failure -->
+          <template x-if="msg.role === 'assistant' && msg.abstained">
+            <div
+              class="mb-1.5 text-xs text-slate-500 dark:text-gray-400 flex items-center gap-1.5"
+            >
+              <span>ℹ️</span>
+              <span>Di luar cakupan dokumen</span>
+            </div>
+          </template>
+
+          <!-- LLM Message (Markdown) -->
+          <template x-if="msg.role === 'assistant'">
+            <div
+              class="prose prose-slate dark:prose-invert prose-p:leading-relaxed prose-pre:bg-slate-800 dark:prose-pre:bg-slate-900 max-w-none break-words text-slate-900 dark:text-gray-200 py-1.5 marker:text-slate-400"
+              x-html="renderMessage(msg.content, index)"
+            ></div>
+          </template>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  {% include "components/chat_input.html" %}
+</main>
+
+<script>
+  document.addEventListener("alpine:init", () => {
+    Alpine.data("chatInterface", () => ({
+      messages: [],
+      currentSessionId:
+        new URLSearchParams(window.location.search).get("session_id") || null,
+      title: "New Chat",
+      input: "",
+      isSubmitting: false,
+      openCitation: null,
+      attachedFile: null,
+      attachmentUploading: false,
+      attachmentError: null,
+
+      init() {
+        if (this.currentSessionId) {
+          this.loadSession(this.currentSessionId);
+        }
+
+        window.addEventListener("load-session", (e) => {
+          this.currentSessionId = e.detail.id;
+          this.loadSession(this.currentSessionId);
+        });
+
+        window.addEventListener("new-session", () => {
+          this.currentSessionId = null;
+          this.title = "New Chat";
+          this.messages = [];
+        });
+
+        // Citation tooltips are injected via x-html (raw innerHTML), so
+        // Alpine directives never run inside them. Expose plain functions
+        // on window (closing over `this`) that the inline onclick
+        // attributes call into, and reassign openCitation to trigger
+        // Alpine's reactivity so renderMessage() re-renders with the
+        // correct open/closed state. Only one citation may be open at a
+        // time, so opening a new one implicitly closes whichever was open.
+        window.__citationToggle = (key) => {
+          this.openCitation = this.openCitation === key ? null : key;
+        };
+        window.__citationClose = (key, evt) => {
+          if (evt) evt.stopPropagation();
+          if (this.openCitation === key) this.openCitation = null;
+        };
+
+        // Close the open citation popout on any click outside of it. Every
+        // interactive element inside a citation already stops propagation,
+        // so this only ever fires for genuine outside clicks.
+        document.addEventListener("click", (e) => {
+          if (this.openCitation === null) return;
+          if (e.target.closest("[data-citation]")) return;
+          this.openCitation = null;
+        });
+      },
+
+      renderMessage(content, msgIndex) {
+        if (!content) return "";
+
+        // Stable per-citation ordinal: citations are only ever appended as
+        // content streams in, never reordered, so this stays stable across
+        // renderMessage() re-runs (including the reactive re-run triggered
+        // by openCitation changing below).
+        let citeOrdinal = 0;
+
+        // Transform citations BEFORE DOMPurify and BEFORE marked.parse
+        // (to prevent marked from turning *...* into <em>...</em>)
+        let markdown = content.replace(
+          /\s*\*\((Supported|Contradiction|Neutral):\s*([0-9.]+)(?:;\s*(.+?)(?:;\s*Page\s*(\d+))?(?:;\s*DocID:([\w-]+))?(?:;\s*Evidence:"([^"]*)")?)?\)\*/g,
+          (match, status, scoreStr, source, page, docId, evidence) => {
+            const score = parseFloat(scoreStr);
+
+            // Grade the badge color by score, not just by label, so a
+            // barely-entailed sentence (e.g. 0.55) reads differently from
+            // a strongly-entailed one (e.g. 0.95) at a glance.
+            let bgColor = "bg-gray-500";
+            let textColor = "text-white";
+            let tierLabel = status;
+            if (status === "Supported") {
+              if (score >= 0.85) {
+                bgColor = "bg-green-600";
+                tierLabel = "Didukung kuat";
+              } else if (score >= 0.7) {
+                bgColor = "bg-green-500";
+                tierLabel = "Didukung";
+              } else {
+                bgColor = "bg-green-300";
+                textColor = "text-green-950";
+                tierLabel = "Sedikit didukung";
+              }
+            } else if (status === "Contradiction") {
+              if (score >= 0.85) {
+                bgColor = "bg-red-600";
+                tierLabel = "Kontradiksi kuat";
+              } else {
+                bgColor = "bg-orange-400";
+                tierLabel = "Kemungkinan kontradiksi";
+              }
+            }
+
+            let tooltip = `<strong>${tierLabel}</strong>: ${score.toFixed(2)}`;
+            if (source)
+              tooltip += `<br><span class="text-slate-300">Source:</span> ${source}`;
+            if (page)
+              tooltip += `<br><span class="text-slate-300">Page:</span> ${page}`;
+            if (evidence)
+              tooltip += `<br><span class="text-slate-300">Cuplikan:</span> "${evidence}"`;
+            if (docId)
+              tooltip += `<br><a href="/api/kb/pdfs/${docId}/download" class="mt-1 inline-flex items-center gap-1 text-blue-300 hover:text-blue-100 underline underline-offset-2" onclick="event.stopPropagation()"><svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download PDF</a>`;
+
+            const key = `${msgIndex}:${citeOrdinal++}`;
+            const isOpen = this.openCitation === key;
+
+            return `<span class="relative inline-block ml-1 align-text-bottom" data-citation="true"><span class="inline-flex items-center justify-center w-[16px] h-[16px] rounded-full text-[10px] font-bold ${textColor} shadow-sm ${bgColor} hover:ring-2 hover:ring-offset-1 hover:ring-slate-400 transition-all dark:hover:ring-offset-[#2f2f2f] cursor-pointer" onclick="event.stopPropagation(); window.__citationToggle('${key}')">i</span><span class="absolute bottom-full left-1/2 mb-2 ${isOpen ? "block" : "hidden"} w-72 max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-lg bg-slate-800 dark:bg-black px-3 py-2 text-xs text-white z-50 shadow-xl border border-slate-700/50 leading-relaxed font-sans font-normal text-left"><button type="button" class="absolute top-1 right-1 text-slate-400 hover:text-white leading-none" onclick="window.__citationClose('${key}', event)">&times;</button><span class="block pr-4">${tooltip}</span></span></span>`;
+          },
+        );
+
+        let html = marked.parse(markdown, { breaks: true });
+        return DOMPurify.sanitize(html, {
+          ADD_ATTR: ["data-citation", "target", "onclick"],
+        });
+      },
+
+      async loadSession(id) {
+        try {
+          const res = await fetch(`/api/chat/sessions/${id}`);
+          const data = await res.json();
+          if (data.error) return;
+          this.title = data.title;
+          this.messages = data.messages;
+          this.scrollToBottom();
+        } catch (e) {
+          console.error(e);
+        }
+      },
+
+      scrollToBottom() {
+        this.$nextTick(() => {
+          const el = document.getElementById("chat-messages");
+          if (el) el.scrollTop = el.scrollHeight;
+        });
+      },
+
+      autoResize(e) {
+        e.target.style.height = "auto";
+        e.target.style.height = e.target.scrollHeight + "px";
+      },
+
+      async handleFileSelect(e) {
+        const file = e.target.files[0];
+        e.target.value = ""; // allow re-selecting the same file later
+        if (!file) return;
+
+        this.attachmentError = null;
+        this.attachedFile = null;
+        this.attachmentUploading = true;
+
+        try {
+          const formData = new FormData();
+          formData.append("file", file);
+          const res = await fetch("/api/chat/attachments/extract", {
+            method: "POST",
+            body: formData,
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            this.attachmentError = data.detail || "Failed to read this PDF.";
+            return;
+          }
+          this.attachedFile = data;
+        } catch (err) {
+          console.error(err);
+          this.attachmentError = "Failed to read this PDF.";
+        } finally {
+          this.attachmentUploading = false;
+        }
+      },
+
+      removeAttachment() {
+        this.attachedFile = null;
+        this.attachmentError = null;
+      },
+
+      async submitMessage() {
+        const msg = this.input.trim();
+        if (!msg || this.isSubmitting) return;
+
+        if (!this.currentSessionId) {
+          try {
+            const res = await fetch("/api/chat/sessions", { method: "POST" });
+            const data = await res.json();
+            this.currentSessionId = data.id;
+            window.dispatchEvent(
+              new CustomEvent("session-created", { detail: { id: data.id } }),
+            );
+          } catch (e) {
+            console.error(e);
+            return;
+          }
+        }
+
+        const attachment = this.attachedFile;
+        this.attachedFile = null;
+        this.attachmentError = null;
+
+        this.input = "";
+        const textarea = document.getElementById("message-input");
+        if (textarea) textarea.style.height = "auto";
+        this.isSubmitting = true;
+
+        this.messages.push({
+          role: "user",
+          content: msg,
+          attachment_filename: attachment ? attachment.filename : null,
+        });
+        const llmIndex =
+          this.messages.push({
+            role: "assistant",
+            content: "",
+            context: null,
+            sources: [],
+            abstained: false,
+          }) - 1;
+        this.scrollToBottom();
+
+        try {
+          const response = await fetch(
+            `/api/chat/sessions/${this.currentSessionId}/stream`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                message: msg,
+                attachment_text: attachment ? attachment.text : null,
+                attachment_filename: attachment ? attachment.filename : null,
+              }),
+            },
+          );
+
+          if (!response.ok) throw new Error("Network error");
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+
+          // The backend streams NDJSON: one JSON object per line, each
+          // tagged with a "type" ("context" | "chunk" | "error" | "done").
+          // Buffer partial lines across reads and route each complete line
+          // by type instead of dumping raw bytes into the message content.
+          let ndjsonBuffer = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            ndjsonBuffer += decoder.decode(value, { stream: true });
+            const lines = ndjsonBuffer.split("\n");
+            ndjsonBuffer = lines.pop();
+
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              let evt;
+              try {
+                evt = JSON.parse(line);
+              } catch (e) {
+                console.error("Failed to parse NDJSON line", line, e);
+                continue;
+              }
+              if (evt.type === "context") {
+                this.messages[llmIndex].context = evt.content;
+                // The wire event carries "chunks" (the name build_subset_d.py
+                // and chat_viz.py also read); the DB read path calls the same
+                // data "sources". Map it here so the live turn and a reloaded
+                // session render identically.
+                this.messages[llmIndex].sources = evt.chunks || [];
+              } else if (evt.type === "chunk") {
+                this.messages[llmIndex].content += evt.content;
+                this.scrollToBottom();
+              } else if (evt.type === "error") {
+                this.messages[llmIndex].content = evt.content;
+                // "irrelevant"/"unsafe" are deliberate guardrail abstentions,
+                // not failures; "internal" is a real error. Same event type for
+                // backward compatibility, distinguished by reason.
+                this.messages[llmIndex].abstained =
+                  evt.reason === "irrelevant" || evt.reason === "unsafe";
+              }
+            }
+          }
+
+          window.dispatchEvent(new Event("session-updated"));
+        } catch (e) {
+          console.error(e);
+          this.messages[llmIndex].content = "Error: Failed to fetch response.";
+        } finally {
+          this.isSubmitting = false;
+          this.$nextTick(() => {
+            if (textarea) textarea.focus();
+          });
+        }
+      },
+    }));
+  });
+</script>
+{% endblock %}

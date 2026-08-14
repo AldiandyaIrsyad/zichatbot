@@ -1,0 +1,340 @@
+{% extends "base.html" %} {% block title %}Admin Dashboard - {{ super() }}{%
+endblock %} {% block layout %} {% include "components/sidebar.html" %}
+
+<!-- Main Admin Area -->
+<main
+  x-data="adminDashboard()"
+  x-init="init()"
+  class="flex-1 flex flex-col h-full bg-white dark:bg-darkbg relative min-w-0 overflow-y-auto"
+>
+  <!-- Header -->
+  <header
+    class="h-14 flex items-center px-6 sticky top-0 z-10 text-lg font-medium border-b border-slate-200 dark:border-darkborder bg-white/80 dark:bg-darkbg/80 backdrop-blur"
+  >
+    <div class="text-slate-900 dark:text-gray-100">Admin Dashboard</div>
+  </header>
+
+  <div class="p-6 max-w-4xl mx-auto w-full space-y-8">
+    <!-- Upload Section -->
+    <section
+      class="bg-slate-50 dark:bg-darksidebar p-6 rounded-xl border border-slate-200 dark:border-darkborder"
+    >
+      <h2 class="text-xl font-semibold mb-4 text-slate-900 dark:text-white">
+        Upload PDFs
+      </h2>
+      <form @submit.prevent="uploadDocuments" class="space-y-4">
+        <div>
+          <label
+            class="block text-sm font-medium text-slate-700 dark:text-gray-300 mb-1"
+            >Select PDF Files</label
+          >
+          <input
+            type="file"
+            @change="onFileSelect($event)"
+            accept="application/pdf"
+            multiple
+            class="w-full text-sm text-slate-500 dark:text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-brand file:text-white hover:file:bg-blue-700 cursor-pointer"
+          />
+          <p class="text-xs text-slate-400 mt-1">
+            You can select multiple PDFs at once. Titles default to the filename
+            — edit them in the table below.
+          </p>
+        </div>
+
+        <!-- File table (only shown when files are selected) -->
+        <template x-if="batchFiles.length > 0">
+          <div
+            class="overflow-x-auto rounded-lg border border-slate-200 dark:border-darkborder"
+          >
+            <table class="w-full text-sm">
+              <thead
+                class="bg-slate-100 dark:bg-darkinput text-slate-600 dark:text-gray-300"
+              >
+                <tr>
+                  <th class="text-left px-3 py-2 font-medium">Filename</th>
+                  <th class="text-left px-3 py-2 font-medium">Title</th>
+                  <th class="text-left px-3 py-2 font-medium">Description</th>
+                  <th class="text-center px-3 py-2 font-medium w-12"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="(item, index) in batchFiles" :key="index">
+                  <tr class="border-t border-slate-200 dark:border-darkborder">
+                    <td
+                      class="px-3 py-2 text-slate-500 dark:text-gray-400 text-xs"
+                      x-text="item.file.name"
+                    ></td>
+                    <td class="px-3 py-2">
+                      <input
+                        type="text"
+                        x-model="item.title"
+                        required
+                        class="w-full bg-white dark:bg-darkinput border border-slate-300 dark:border-darkborder rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-brand dark:text-white"
+                      />
+                    </td>
+                    <td class="px-3 py-2">
+                      <input
+                        type="text"
+                        x-model="item.description"
+                        class="w-full bg-white dark:bg-darkinput border border-slate-300 dark:border-darkborder rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-brand dark:text-white"
+                        placeholder="Optional"
+                      />
+                    </td>
+                    <td class="px-3 py-2 text-center">
+                      <button
+                        type="button"
+                        @click="removeFile(index)"
+                        class="text-red-500 hover:text-red-700 text-xs"
+                        title="Remove"
+                      >
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
+        <button
+          type="submit"
+          :disabled="uploading || batchFiles.length === 0"
+          class="bg-brand text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors w-full sm:w-auto disabled:opacity-50"
+        >
+          <span
+            x-text="uploading ? 'Uploading...' : `Upload ${batchFiles.length} Document${batchFiles.length === 1 ? '' : 's'}`"
+          ></span>
+        </button>
+        <div
+          x-show="uploadStatus.show"
+          x-text="uploadStatus.message"
+          :class="uploadStatus.isError ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'"
+          class="text-sm mt-2 block"
+          style="display: none"
+        ></div>
+      </form>
+    </section>
+
+    <!-- PDF List Section -->
+    <section>
+      <h2 class="text-xl font-semibold mb-4 text-slate-900 dark:text-white">
+        Uploaded Documents
+      </h2>
+      <div class="space-y-3">
+        <!-- Currently disabled because it will push layout around. -->
+        <!-- <template x-if="loading">
+          <div class="text-slate-500 dark:text-gray-400 text-sm italic">Loading documents...</div>
+        </template> -->
+
+        <template x-if="!loading && pdfs.length === 0">
+          <div class="text-slate-500 dark:text-gray-400 text-sm italic">
+            No documents uploaded yet.
+          </div>
+        </template>
+
+        <template x-for="pdf in pdfs" :key="pdf.id">
+          <div
+            class="bg-white dark:bg-darksidebar p-4 rounded-xl border border-slate-200 dark:border-darkborder flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between"
+          >
+            <div class="flex-1">
+              <h3
+                class="font-medium text-slate-900 dark:text-white"
+                x-text="pdf.title"
+              ></h3>
+              <p
+                class="text-sm text-slate-500 dark:text-gray-400 mt-1"
+                x-text="pdf.description || 'No description provided.'"
+              ></p>
+            </div>
+
+            <div class="flex items-center gap-3 w-full sm:w-auto mt-3 sm:mt-0">
+              <!-- Ingestion Status Badge -->
+              <template x-if="pdf.ingestion_status !== 'completed'">
+                <span
+                  class="px-2.5 py-1 text-xs font-medium rounded-full"
+                  :class="{
+                        'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400': pdf.ingestion_status === 'pending' || pdf.ingestion_status === 'processing',
+                        'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400': pdf.ingestion_status === 'failed'
+                      }"
+                  x-text="pdf.ingestion_status.charAt(0).toUpperCase() + pdf.ingestion_status.slice(1)"
+                >
+                </span>
+              </template>
+
+              <!-- Toggle Switch -->
+              <template x-if="pdf.ingestion_status === 'completed'">
+                <label
+                  class="flex items-center cursor-pointer gap-2 text-sm text-slate-700 dark:text-gray-300"
+                >
+                  <span>Active</span>
+                  <div class="relative">
+                    <input
+                      type="checkbox"
+                      class="sr-only"
+                      :checked="pdf.active"
+                      @change="toggleStatus(pdf.id, $event.target.checked)"
+                    />
+                    <div
+                      class="block w-10 h-6 rounded-full transition-colors"
+                      :class="pdf.active ? 'bg-brand' : 'bg-slate-200 dark:bg-gray-700'"
+                    ></div>
+                    <div
+                      class="dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform"
+                      :class="pdf.active ? 'transform translate-x-4' : ''"
+                    ></div>
+                  </div>
+                </label>
+              </template>
+
+              <!-- Delete button -->
+              <button
+                @click="deletePDF(pdf.id)"
+                class="text-red-500 hover:text-red-700 text-sm font-medium px-3 py-1.5 rounded bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+  function adminDashboard() {
+    return {
+      pdfs: [],
+      loading: true,
+      batchFiles: [],
+      uploading: false,
+      uploadStatus: { show: false, message: "", isError: false },
+
+      async init() {
+        await this.loadPDFs();
+      },
+
+      onFileSelect(event) {
+        const selected = Array.from(event.target.files);
+        for (const file of selected) {
+          // Default title = filename without extension
+          const baseName = file.name.replace(/\.pdf$/i, "");
+          this.batchFiles.push({ file, title: baseName, description: "" });
+        }
+        // Reset the input so selecting the same file again still triggers change
+        event.target.value = "";
+      },
+
+      removeFile(index) {
+        this.batchFiles.splice(index, 1);
+      },
+
+      async loadPDFs() {
+        this.loading = true;
+        try {
+          const res = await fetch("/api/admin/pdfs");
+          if (res.ok) {
+            this.pdfs = await res.json();
+          } else {
+            console.error("Failed to load PDFs", await res.text());
+          }
+        } catch (e) {
+          console.error("Failed to load PDFs", e);
+        } finally {
+          this.loading = false;
+        }
+      },
+
+      async toggleStatus(id, active) {
+        try {
+          const res = await fetch(`/api/admin/pdfs/${id}/status`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ active }),
+          });
+          if (!res.ok) {
+            alert("Failed to update status");
+          }
+          await this.loadPDFs();
+        } catch (e) {
+          console.error(e);
+          await this.loadPDFs();
+        }
+      },
+
+      async deletePDF(id) {
+        if (!confirm("Are you sure you want to delete this document?")) return;
+        try {
+          const res = await fetch(`/api/admin/pdfs/${id}`, {
+            method: "DELETE",
+          });
+          if (res.ok) {
+            await this.loadPDFs();
+          } else {
+            alert("Failed to delete document");
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      },
+
+      async uploadDocuments() {
+        if (this.batchFiles.length === 0) return;
+
+        this.uploading = true;
+        this.uploadStatus = { show: false, message: "", isError: false };
+
+        const formData = new FormData();
+        for (const item of this.batchFiles) {
+          formData.append("files", item.file);
+          formData.append("titles", item.title);
+          formData.append("descriptions", item.description);
+        }
+
+        try {
+          const res = await fetch("/api/admin/pdfs/batch", {
+            method: "POST",
+            body: formData,
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            const failed = data.failed_count || 0;
+            const message = failed > 0
+              ? `Uploaded ${data.count} document${data.count === 1 ? "" : "s"}, ${failed} failed: ` +
+                (data.failures || []).map((f) => `${f.filename} (${f.error})`).join("; ")
+              : `Successfully uploaded ${data.count} document${data.count === 1 ? "" : "s"}!`;
+            this.uploadStatus = {
+              show: true,
+              message,
+              isError: failed > 0,
+            };
+            this.batchFiles = [];
+            await this.loadPDFs();
+          } else {
+            const err = await res.json().catch(() => ({}));
+            this.uploadStatus = {
+              show: true,
+              message: err.detail || "Upload failed.",
+              isError: true,
+            };
+          }
+        } catch (err) {
+          console.error(err);
+          this.uploadStatus = {
+            show: true,
+            message: "An error occurred during upload.",
+            isError: true,
+          };
+        } finally {
+          this.uploading = false;
+          setTimeout(() => {
+            this.uploadStatus.show = false;
+          }, this.uploadStatus.isError ? 10000 : 3000);
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}

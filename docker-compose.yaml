@@ -1,0 +1,238 @@
+name: skripsi
+services:
+
+  
+  ## DATABASES
+  postgres:
+    image: postgres:17-alpine
+    container_name: postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  qdrant:
+    image: qdrant/qdrant:v1.18.2
+    container_name: qdrant_vector_db
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
+      - "127.0.0.1:${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    profiles: ["ingestion", "chat"]
+
+
+  ## THIRD PARTY
+  infinity:
+    image: michaelf34/infinity:0.0.77
+    container_name: infinity_embeddings
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${INFINITY_PORT:-7997}:7997"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      INFINITY_BATCH_SIZE: "2"
+      # One fewer "true" than before — BAAI/bge-m3 no longer loaded here (see
+      # below): Infinity's own model list documents bge-m3 as "no sparse", so
+      # embeddings now come from an in-process BGEM3FlagModel adapter
+      # (app/kb/infra/bge_m3_embeddings.py) that actually computes sparse
+      # vectors. Infinity still serves reranker + prompt-guard + NLI.
+      # Two models now, not three — the prompt guard moved to its own service
+      # (see prompt-guard below).
+      INFINITY_MODEL_WARMUP: "true;false"
+      HF_TOKEN: ${INFINITY_HF_API_KEY}
+    command: >
+      v2
+      --model-id ${INFINITY_RERANKER_MODEL}
+      --model-id ${INFINITY_NLI_MODEL}
+      --device cuda
+      --dtype float16
+    volumes:
+      - infinity_cache:/app/.cache
+
+  # The IVM safety classifier, on a purpose-built server rather than the shared
+  # inference server above.
+  #
+  # The upstream Llama-Prompt-Guard-2-86M config declares its architecture but
+  # carries no id2label, so a general-purpose server reports LABEL_0/LABEL_1 and
+  # the label meaning has to be supplied from outside. That was previously done
+  # with a patched config.json bind-mounted over a *pinned model-snapshot hash*
+  # — a workaround that stops applying the moment the model changes, which is
+  # precisely when swapping in the Indonesian fine-tune. This service resolves
+  # the mapping in code and logs it at startup, so no mount is involved and the
+  # fine-tune needs no special handling.
+  #
+  # Swapping models is now one variable plus a restart of this container alone,
+  # instead of reloading the reranker and NLI model to change an 86M classifier.
+  #
+  # CPU by design: the GPU is an 8 GB card already holding the reranker, the NLI
+  # model and the in-process embedder. Measured cost of running the guard on CPU
+  # is ~160 ms per call, which is small next to retrieval and generation.
+  prompt-guard:
+    build:
+      context: ./services/prompt_guard
+    container_name: prompt_guard
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PROMPT_GUARD_PORT:-7998}:7997"
+    environment:
+      PROMPT_GUARD_MODEL: ${INFINITY_PROMPT_GUARD_MODEL}
+      PROMPT_GUARD_DEVICE: ${PROMPT_GUARD_DEVICE:-cpu}
+      PROMPT_GUARD_MAX_LENGTH: ${PROMPT_GUARD_MAX_LENGTH:-512}
+      # Needed for gated repos (the base model is gated) and private repos
+      # (where the fine-tune will live).
+      HF_TOKEN: ${INFINITY_HF_API_KEY}
+    volumes:
+      - prompt_guard_cache:/cache/huggingface
+      # Locally trained checkpoints, so a fine-tune can be served without a Hub
+      # round-trip. Read-only: the server must never write into the artifact it
+      # is being evaluated on.
+      - ./models:/models:ro
+
+  # The Indonesian fine-tune, on its own port so both guards can run at once.
+  #
+  # Exp1a compares them, and a model is fixed at container start, so switching
+  # by editing one variable would mean the two numbers come from different
+  # moments in time. Running both lets the same script hit each in one session:
+  #
+  #   docker compose up -d prompt-guard prompt-guard-ft
+  #   python -m evals.exp1a_safety.run --infinity-url http://localhost:7998 ...
+  #   python -m evals.exp1a_safety.run --infinity-url http://localhost:7999 ...
+  #
+  # Under a profile so it stays out of the default `docker compose up` — the
+  # checkpoint does not exist until training has been run, and a service that
+  # crash-loops on a missing path is worse than one that is simply absent.
+  # Start it explicitly, or with `--profile finetuned up -d`.
+  prompt-guard-ft:
+    profiles: ["finetuned"]
+    build:
+      context: ./services/prompt_guard
+    container_name: prompt_guard_ft
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PROMPT_GUARD_FT_PORT:-7999}:7997"
+    environment:
+      # Defaults to the local training output. Point at a Hub id instead if the
+      # checkpoint has been pushed.
+      PROMPT_GUARD_MODEL: ${PROMPT_GUARD_FT_MODEL:-/models/prompt_guard_id}
+      PROMPT_GUARD_DEVICE: ${PROMPT_GUARD_DEVICE:-cpu}
+      PROMPT_GUARD_MAX_LENGTH: ${PROMPT_GUARD_MAX_LENGTH:-512}
+      HF_TOKEN: ${INFINITY_HF_API_KEY}
+    volumes:
+      - prompt_guard_cache:/cache/huggingface
+      - ./models:/models:ro
+
+  unstructured-api:
+    image: quay.io/unstructured-io/unstructured-api:0.1.7
+    container_name: unstructured_parser
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${UNSTRUCTURED_PORT:-8001}:8000"
+
+    environment:
+      HF_TOKEN: ${UNSTRUCTURED_HF_TOKEN}
+
+  # Local Qwen3Guard-Gen, served as GGUF through Ollama's OpenAI-compatible API.
+  #
+  # Qwen3Guard is not on OpenRouter, and this account's Hugging Face Inference
+  # billing is blocked (402), so the hosted path is closed. Ollama pulls the
+  # pre-quantized 0.6B GGUF directly and exposes /v1/chat/completions, which the
+  # existing Qwen3GuardClient already speaks — only CHAT_SAFETY_API_BASE_URL has
+  # to point here. Under a profile so it stays out of the default `up`:
+  #
+  #   docker compose --profile qwen up -d ollama
+  #   docker exec ollama_backend ollama pull hf.co/geoffmunn/Qwen3Guard-Gen-0.6B:Q8_0
+  #
+  # CPU by default: the 8 GB GPU already holds the reranker, NLI and embedder,
+  # and the 0.6B at Q8 is ~800 MB, so CPU latency is small next to generation.
+  # For the 4B, convert Qwen/Qwen3Guard-Gen-4B to GGUF (llama.cpp
+  # convert_hf_to_gguf.py + quantize Q4_K_M), `ollama create qwen3guard-4b`, and
+  # uncomment the GPU reservation below to offload it.
+  ollama:
+    image: ollama/ollama:0.24.0
+    container_name: ollama_backend
+    profiles: ["qwen"]
+    ports:
+      - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"
+    environment:
+      # Force CPU so the guard never contends with the reranker/NLI/embedder on
+      # the shared 8 GB card. Drop this (and add the reservation below) to
+      # offload the 4B.
+      OLLAMA_NUM_GPU: "0"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+
+  # --- Observability Stack ---
+  loki:
+    image: grafana/loki:3.5.0
+    container_name: loki
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${LOGGER_LOKI_PORT}:3100"
+    volumes:
+      - ./observability/loki-config.yaml:/etc/loki/local-config.yaml
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    profiles: ["monitoring"]
+
+  log_router:
+    image: timberio/vector:0.47.0-alpine
+    container_name: log_router
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${LOGGER_VECTOR_PORT}:9000"
+    volumes:
+      - ./observability/vector.yaml:/etc/vector/vector.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: --config /etc/vector/vector.yaml
+    depends_on:
+      - loki
+    profiles: ["monitoring"]
+
+  grafana:
+    image: grafana/grafana:12.0.0
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${LOGGER_GRAFANA_PORT}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${LOGGER_USERNAME:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${LOGGER_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - loki
+    profiles: ["monitoring"]
+
+volumes:
+  postgres_data:
+  ollama_data:
+  qdrant_data:
+  loki_data:
+  grafana_data:
+  infinity_cache:
+  prompt_guard_cache:

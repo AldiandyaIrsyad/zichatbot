@@ -1,0 +1,98 @@
+<!-- Input Area -->
+<div class="w-full pt-4 pb-6 px-4 md:px-8 bg-white dark:bg-darkbg shrink-0">
+  <div class="max-w-3xl mx-auto relative">
+    <!-- Attached file chip / upload status -->
+    <div x-show="attachedFile || attachmentUploading || attachmentError" class="mb-2 flex items-center gap-2 flex-wrap">
+      <template x-if="attachmentUploading">
+        <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-gray-400 bg-slate-100 dark:bg-[#2a2a2a] rounded-full px-3 py-1.5">
+          <svg class="animate-spin h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+          <span>Reading PDF...</span>
+        </div>
+      </template>
+      <template x-if="attachedFile && !attachmentUploading">
+        <div class="flex items-center gap-2 text-xs text-slate-700 dark:text-gray-200 bg-slate-100 dark:bg-[#2a2a2a] rounded-full pl-3 pr-1.5 py-1.5">
+          <span>📎</span>
+          <span class="max-w-[220px] truncate" x-text="attachedFile.filename"></span>
+          <span x-show="attachedFile.truncated" class="text-amber-600 dark:text-amber-400" title="Only part of this document was used">(truncated)</span>
+          <button type="button" @click="removeAttachment" class="rounded-full w-5 h-5 flex items-center justify-center hover:bg-slate-200 dark:hover:bg-[#3a3a3a] leading-none">&times;</button>
+        </div>
+      </template>
+      <template x-if="attachmentError && !attachmentUploading">
+        <div class="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/40 rounded-full px-3 py-1.5" x-text="attachmentError"></div>
+      </template>
+    </div>
+
+    <form
+      @submit.prevent="submitMessage"
+      class="relative flex items-end shadow-md rounded-2xl bg-white dark:bg-darkinput border border-slate-200 dark:border-darkborder overflow-hidden focus-within:ring-1 focus-within:ring-slate-300 dark:focus-within:ring-[#444] transition-all"
+    >
+      <input
+        type="file"
+        accept="application/pdf,.pdf"
+        x-ref="fileInput"
+        class="hidden"
+        @change="handleFileSelect"
+      />
+      <div class="p-2 pb-0">
+        <button
+          type="button"
+          @click="$refs.fileInput.click()"
+          :disabled="isSubmitting || attachmentUploading"
+          title="Attach a PDF"
+          class="p-2 rounded-xl text-slate-500 dark:text-gray-400 hover:bg-slate-100 dark:hover:bg-[#3a3a3a] focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            class="h-5 w-5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"></path>
+          </svg>
+        </button>
+      </div>
+      <textarea
+        id="message-input"
+        x-model="input"
+        @input="autoResize"
+        @keydown.enter="if(!$event.shiftKey) { $event.preventDefault(); submitMessage(); }"
+        :disabled="isSubmitting"
+        class="flex-1 max-h-[200px] min-h-[56px] w-full resize-none bg-transparent px-4 py-4 focus:outline-none dark:text-gray-100 placeholder-slate-400 dark:placeholder-gray-400"
+        placeholder="Message Mock LLM..."
+        rows="1"
+        required
+      ></textarea>
+      <div class="p-2">
+        <button
+          type="submit"
+          :disabled="isSubmitting || attachmentUploading || input.trim() === ''"
+          class="p-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-black hover:opacity-80 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed transition-opacity flex items-center justify-center"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            class="h-5 w-5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </div>
+    </form>
+    <div class="text-center mt-3 text-xs text-slate-500 dark:text-gray-400">
+      Mock LLM may generate inaccurate info.
+    </div>
+  </div>
+</div>

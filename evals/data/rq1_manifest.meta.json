@@ -1,0 +1,8 @@
+{
+  "version": "v2",
+  "seed": 42,
+  "documents": 300,
+  "gold_documents": 115,
+  "distractors": 185,
+  "subset_a": "data/v2/subset_a.csv"
+}

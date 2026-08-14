@@ -1,0 +1,62 @@
+{
+  "subset": "c",
+  "dataset_version": "v2",
+  "generated_at_utc": "2026-07-26T00:07:19.606262+00:00",
+  "git_sha": "73f4f5e",
+  "row_count": 200,
+  "generator": {
+    "model": "deepseek/deepseek-v4-pro",
+    "temperature": 0.0
+  },
+  "panel": {
+    "models": [
+      "google/gemini-2.5-flash",
+      "meta-llama/llama-3.3-70b-instruct",
+      "qwen/qwen3.7-plus",
+      "z-ai/glm-5.2",
+      "xiaomi/mimo-v2.5"
+    ],
+    "size": 5,
+    "acceptance_threshold": 4,
+    "temperature": 0.0,
+    "strict_principal_rows": true,
+    "infrastructure_errors_are_votes": false
+  },
+  "output_csv": "subset_c.csv",
+  "cost_ledger": "data/v2/costs/dataset_generation.jsonl",
+  "budget_usd": 5.75,
+  "generated": 5,
+  "rejected": 1,
+  "targets": {
+    "direct_upi": 50,
+    "indirect_upi": 50,
+    "near_miss_government": 34,
+    "adjacent_legal": 33,
+    "off_topic": 33
+  },
+  "by_subtype": {
+    "direct_upi": 50,
+    "indirect_upi": 50,
+    "near_miss_government": 34,
+    "adjacent_legal": 33,
+    "off_topic": 33
+  },
+  "by_label": {
+    "in_domain": 100,
+    "out_of_domain": 100
+  },
+  "by_split": {
+    "calibration": 60,
+    "locked_test": 140
+  },
+  "acceptance": {
+    "strict_threshold": 4,
+    "strict_rows": 200,
+    "contested_rows": 0,
+    "contested_sidecar_rows": 128
+  },
+  "panel_yes_distribution": {
+    "5": 57,
+    "4": 143
+  }
+}

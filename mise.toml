@@ -1,0 +1,8 @@
+[tools]
+python = "3.11"
+
+[env]
+_.python.venv = { path = ".venv", create = true }
+
+[tasks]
+dev = "uvicorn app.main:fastapi_app --reload"
