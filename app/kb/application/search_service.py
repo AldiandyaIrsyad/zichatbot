@@ -12,11 +12,13 @@ Pipeline stages:
 
 import math
 import re
+from datetime import datetime
 from typing import Dict, List, Optional, Set
 import structlog
 
 from app.kb.domain.interfaces import ITextEmbedder, IVectorStore, IKBRepository, IReranker, IQueryExpander, SearchResult
-from app.kb.domain.models import PDFDocument, RetrievedContext
+from app.kb.domain.models import PDFDocument, RetrievedContext, RetrievedDocument
+from app.kb.application.retrieval_strategies import BaselineStrategy, RetrievalStrategy
 
 logger = structlog.get_logger(__name__)
 
@@ -24,6 +26,31 @@ logger = structlog.get_logger(__name__)
 INITIAL_SEARCH_TOP_K = 50
 RERANK_TOP_K = 8
 HYDE_FUSION_RRF_K = 60
+
+# Hydration budget.
+#
+# Siblings and cross-refs carry score 0.0 — they were never scored against the
+# query, they are adjacency guesses. Uncapped they crowd the result: reranked
+# candidates dedupe by parent down to 4-8 unique chunks, so unranked hydration
+# was taking 7-11 of 15 slots and up to 68% of the context characters the LLM
+# sees. These caps keep hydration a supplement to the ranked results instead of
+# a replacement for them.
+MAX_SIBLING_CONTEXTS = 3
+MAX_CROSS_REF_CONTEXTS = 3
+
+# A single chunk can mention dozens of "Pasal N", and each prefix is a separate
+# path-prefix query returning every matching chunk in the KB — 1366 fetched
+# chunks for one observed query, essentially all of them discarded at top_k.
+# Bound both the fan-out and the per-prefix result set.
+MAX_CROSS_REF_PREFIXES = 8
+MAX_CHUNKS_PER_CROSS_REF = 2
+
+# Shortest hydrated chunk worth a context slot. 1070 parent chunks in this KB
+# are heading-only skeletons ("MEMUTUSKAN:\n\nPasal 1\n\nPasal 2\n\nPasal 3") —
+# a "Pasal 3" path-prefix lookup matches them across unrelated documents, and
+# they were arriving as evidence that says nothing. Primaries are exempt: those
+# were scored against the query, so a short one earned its place.
+MIN_HYDRATED_CHARS = 200
 
 
 class SearchService:
@@ -36,18 +63,28 @@ class SearchService:
         kb_repo: IKBRepository,
         reranker: Optional[IReranker] = None,
         query_expander: Optional[IQueryExpander] = None,
+        retrieval_strategy: Optional[RetrievalStrategy] = None,
+        rerank_probe: str = "hyde",
     ):
         """Wire the collaborators used by the 6-step pipeline (see module
         docstring): ``text_embedder`` (step 2), ``vector_store`` (step 3),
         ``kb_repo`` (steps 4, 6), ``reranker`` (step 5, optional — skipped
         if None), and ``query_expander`` (step 1 HyDE, optional — injected
         across the chat→kb boundary when enabled, see
-        ``app/kb/domain/interfaces.py::IQueryExpander``)."""
+        ``app/kb/domain/interfaces.py::IQueryExpander``). ``retrieval_strategy``
+        is the final document-ranking rule applied by ``search_documents``;
+        defaults to the identity baseline.
+
+        ``rerank_probe`` selects what the cross-encoder scores against when
+        expansion ran: ``"hyde"`` (the generated passage) or ``"query"`` (the
+        raw question). See ``RetrievalSettings.rerank_probe``."""
         self.text_embedder = text_embedder
         self.vector_store = vector_store
         self.kb_repo = kb_repo
         self.reranker = reranker
         self.query_expander = query_expander
+        self.retrieval_strategy = retrieval_strategy or BaselineStrategy()
+        self.rerank_probe = rerank_probe
 
     async def search(
         self,
@@ -56,6 +93,8 @@ class SearchService:
         session_id: Optional[str] = None,
         mode: str = "hybrid",
         rerank: bool = True,
+        use_expansion: bool = True,
+        hydrate: bool = True,
     ) -> List[RetrievedContext]:
         """Search the Knowledge Base using the 6-step retrieval pipeline.
 
@@ -69,6 +108,14 @@ class SearchService:
         ranking — for ablations comparing the fusion strategies themselves
         rather than three reranked variants of them. Production callers leave it
         True.
+
+        ``use_expansion=False`` skips HyDE for this call even when an expander
+        is wired. Query expansion costs one LLM round-trip per passage, so a
+        caller that only needs a coarse signal — the relevance pre-check, which
+        looks at top-k scores rather than reading the chunks — should not pay
+        for it. ``hydrate=False`` likewise skips sibling/cross-reference
+        expansion, which only appends unranked adjacency (score 0.0) and costs
+        a burst of DB queries.
         """
         if not query.strip():
             return []
@@ -78,15 +125,23 @@ class SearchService:
         # --- Step 1: raw embedding, then optional three-passage HyDE ---
         # The raw query is always retained.  A mean HyDE dense vector supplies
         # a second ranking, rather than replacing raw dense or sparse evidence.
-        raw_embeddings = await self.text_embedder.embed_texts([query])
+        raw_embeddings = await self.text_embedder.embed_texts([query], is_query=True)
         if not raw_embeddings:
             return []
         raw_query_emb = raw_embeddings[0]
         hyde_dense_vector: Optional[List[float]] = None
-        if self.query_expander is not None:
+        # Kept for step 5: the hypothetical answer is a sharper cross-encoder
+        # probe than the question, because it is written in the register of the
+        # passage that should match (see RetrievalSettings.rerank_probe).
+        hyde_probe: Optional[str] = None
+        if self.query_expander is not None and use_expansion:
             try:
                 hyde_docs = await self.query_expander.expand_many(query)
                 if hyde_docs:
+                    hyde_probe = "\n\n".join(hyde_docs)
+                    # Deliberately NOT is_query: HyDE passages are hypothetical
+                    # documents, so for an asymmetric encoder they belong in
+                    # document space — that identity is the whole point of HyDE.
                     hyde_embeddings = await self.text_embedder.embed_texts(hyde_docs)
                     hyde_dense_vector = self._mean_normalized_dense(
                         [embedding.dense for embedding in hyde_embeddings]
@@ -158,10 +213,18 @@ class SearchService:
         # --- Step 5: Cross-encoder rerank chunks → top-8 ---
         if rerank and self.reranker is not None and candidates:
             try:
-                child_texts = [c.text for _, c in candidates]
+                rerank_texts = await self._rerank_texts(candidates)
+                # Scoring against the raw question lets a chunk that merely
+                # echoes its wording outrank the one that answers it — "berapa
+                # UKT 2026" pulls decrees that happen to say "UKT" and "2026".
+                # Concatenating query + passage is worse than either alone: it
+                # re-injects the wording the passage was meant to get past.
+                probe = query
+                if self.rerank_probe == "hyde" and hyde_probe:
+                    probe = hyde_probe
                 rerank_results = await self.reranker.rerank(
-                    query=query,
-                    documents=child_texts,
+                    query=probe,
+                    documents=rerank_texts,
                     top_k=RERANK_TOP_K,
                 )
                 candidates = [
@@ -185,38 +248,51 @@ class SearchService:
         doc_ids = list(set(r.doc_id for r, _ in candidates))
         pdf_docs: List[PDFDocument] = await self.kb_repo.get_pdfs_by_ids(doc_ids)
         doc_title_map: Dict[str, str] = {doc.id: doc.title or doc.id for doc in pdf_docs}
+        doc_released_map: Dict[str, Optional[datetime]] = {doc.id: doc.released_date for doc in pdf_docs}
 
-        # Build primary contexts
+        # Build primary contexts. The hierarchical breadcrumb is appended to the
+        # parent text here (post-retrieval) rather than embedded into the child
+        # vectors at ingestion time — "post-generation" hierarchical chunking.
         contexts: List[RetrievedContext] = []
         for sr, child in candidates:
             parent = parent_map.get(child.parent_chunk_id)
             if parent:
+                breadcrumbs = parent.breadcrumbs or []
+                text = (
+                    (" > ".join(breadcrumbs) + "\n\n" + parent.text)
+                    if breadcrumbs
+                    else parent.text
+                )
                 contexts.append(
                     RetrievedContext(
                         chunk_id=sr.chunk_id,
                         parent_chunk_id=child.parent_chunk_id,
                         doc_id=sr.doc_id,
-                        text=parent.text,
+                        text=text,
                         score=sr.score,
                         source_title=doc_title_map.get(sr.doc_id, sr.doc_id),
                         page=parent.page,
-                        breadcrumbs=parent.breadcrumbs or [],
+                        breadcrumbs=breadcrumbs,
                         content_type=getattr(parent, "content_type", "text") or "text",
                         child_text=child.text,
                         path=getattr(parent, "path", "") or "",
                         depth=getattr(parent, "depth", 0) or 0,
+                        released_date=doc_released_map.get(sr.doc_id),
                     )
                 )
 
-        # --- Step 6b: Sibling hydration ---
-        sibling_contexts = await self._hydrate_siblings(
-            contexts, parent_map, doc_title_map
-        )
-
-        # --- Step 6c: Cross-reference detection ---
-        cross_ref_contexts = await self._detect_and_fetch_cross_refs(
-            contexts, parent_map, doc_title_map
-        )
+        # --- Step 6b/6c: Sibling + cross-reference hydration (bounded) ---
+        # Both are pure DB fan-out and only add unranked adjacency, so a caller
+        # that just needs retrieval scores can turn them off.
+        sibling_contexts: List[RetrievedContext] = []
+        cross_ref_contexts: List[RetrievedContext] = []
+        if hydrate:
+            sibling_contexts = await self._hydrate_siblings(
+                contexts, parent_map, doc_title_map
+            )
+            cross_ref_contexts = await self._detect_and_fetch_cross_refs(
+                contexts, parent_map, doc_title_map
+            )
 
         # --- Step 7: Merge + dedupe ---
         all_contexts = self._merge_and_dedupe(contexts, sibling_contexts, cross_ref_contexts)
@@ -232,6 +308,93 @@ class SearchService:
             cross_refs=len(cross_ref_contexts),
         )
         return result
+
+    async def search_documents(
+        self,
+        query: str,
+        top_k: int = 15,
+        session_id: Optional[str] = None,
+        mode: str = "hybrid",
+        rerank: bool = True,
+    ) -> List[RetrievedDocument]:
+        """Run the chunk-level pipeline and aggregate to document-level output."""
+        contexts = await self.search(
+            query=query,
+            top_k=top_k,
+            session_id=session_id,
+            mode=mode,
+            rerank=rerank,
+        )
+        return await self.aggregate_documents(contexts)
+
+    async def aggregate_documents(
+        self, contexts: List[RetrievedContext]
+    ) -> List[RetrievedDocument]:
+        """Aggregate chunk-level contexts into document-level output.
+
+        Returns one :class:`RetrievedDocument` per unique source document, with
+        the document's original title, release date, and the concatenated
+        retrieved parent sections (in retrieval order, deduplicated by parent
+        chunk). The document score is the best chunk score; the configured
+        retrieval strategy then produces the final ordering (e.g. date priority).
+        """
+        if not contexts:
+            return []
+
+        # Group ranked contexts by document, preserving retrieval order.
+        grouped: Dict[str, List[RetrievedContext]] = {}
+        for ctx in contexts:
+            grouped.setdefault(ctx.doc_id, []).append(ctx)
+
+        # Derive title/released_date from the contexts themselves (populated by
+        # ``search()``), avoiding a redundant ``get_pdfs_by_ids`` on the hot
+        # path. Only docs whose contexts all lack ``released_date`` (e.g. a
+        # cross-reference introducing a doc outside the primary candidate set)
+        # are refetched — a rare fallback.
+        title_by_doc: Dict[str, str] = {}
+        released_by_doc: Dict[str, Optional[datetime]] = {}
+        missing: List[str] = []
+        for doc_id, ctxs in grouped.items():
+            title_by_doc[doc_id] = ctxs[0].source_title or doc_id
+            released = next(
+                (c.released_date for c in ctxs if c.released_date is not None),
+                None,
+            )
+            released_by_doc[doc_id] = released
+            if released is None:
+                missing.append(doc_id)
+
+        if missing:
+            pdf_docs = await self.kb_repo.get_pdfs_by_ids(missing)
+            for pdf in pdf_docs:
+                if pdf.title:
+                    title_by_doc[pdf.id] = pdf.title
+                released_by_doc[pdf.id] = pdf.released_date
+
+        documents: List[RetrievedDocument] = []
+        for doc_id, ctxs in grouped.items():
+            # Sibling/cross-ref hydration can surface the same parent more than
+            # once — deduplicate so document content isn't repeated.
+            seen: Set[str] = set()
+            parts: List[str] = []
+            for ctx in ctxs:
+                key = ctx.parent_chunk_id or ctx.chunk_id
+                if key in seen:
+                    continue
+                seen.add(key)
+                parts.append(ctx.text)
+
+            documents.append(
+                RetrievedDocument(
+                    doc_id=doc_id,
+                    title=title_by_doc.get(doc_id, doc_id),
+                    released_date=released_by_doc.get(doc_id),
+                    content="\n\n".join(parts),
+                    score=max(ctx.score for ctx in ctxs),
+                )
+            )
+
+        return self.retrieval_strategy.rank_documents(documents)
 
     @staticmethod
     def _mean_normalized_dense(vectors: List[List[float]]) -> Optional[List[float]]:
@@ -263,6 +426,80 @@ class SearchService:
             )
             for result, score in sorted(fused.values(), key=lambda item: item[1], reverse=True)
         ]
+
+    async def _rerank_texts(self, candidates: List) -> List[str]:
+        """Return the text each candidate should be scored on.
+
+        Children are ~512 chars (``CHUNKING_CHILD_MAX_CHARS``), which is too
+        little for a cross-encoder to judge relevance: most children of the
+        *correct* document are boilerplate ("Segala biaya yang timbul…") that
+        genuinely does not answer the question in isolation. A reranker asked
+        about them correctly answers "no" — for the right document and the wrong
+        one alike — so their scores collapse into an undifferentiated floor and
+        sorting by score shuffles right-document chunks against wrong-document
+        ones. Measured on Qwen3-Reranker-0.6B: 0.000294 vs 0.000175 for
+        boilerplate children (noise), against 0.98 vs 0.0007 for the same two
+        documents at parent size — a 1470x separation instead of 1.7x.
+
+        The missing context is not more surrounding prose — it is the
+        document's *identity*, and that lives outside the chunk text entirely.
+        A child reading "membayar biaya UKT 500.000" is unjudgeable on its own:
+        which programme, which year? Only the document title says
+        "1313-UN40-KM.02.02-2026 - Peserta Program Outbound Student Mobility".
+        Parent text does not contain it either — parents are sections, while
+        the title is a column on ``PDFDocument`` — so scoring parents fixes the
+        collapse without answering "which document is this".
+
+        So each candidate is scored on its own text prefixed with the title,
+        release year, and heading breadcrumbs. That is ~700 chars against
+        ~4096 for a parent, and it is the only variant that carries the decree
+        number the identifier-style questions actually ask for.
+
+        Degrades cleanly: a document whose title is missing is scored on its
+        chunk text alone, exactly as before.
+        """
+        doc_ids = list({sr.doc_id for sr, _ in candidates})
+        titles: Dict[str, str] = {}
+        codes: Dict[str, str] = {}
+        released: Dict[str, Optional[datetime]] = {}
+        crumbs: Dict[str, List[str]] = {}
+        try:
+            docs = await self.kb_repo.get_pdfs_by_ids(doc_ids)
+            titles = {d.id: (d.title or "") for d in docs}
+            codes = {d.id: (getattr(d, "code", None) or "") for d in docs}
+            released = {d.id: d.released_date for d in docs}
+            # Breadcrumbs live on ParentChunk, not ChildChunk — reading
+            # child.breadcrumbs silently yields nothing.
+            parents = await self.kb_repo.get_parent_chunks_by_ids(
+                list({c.parent_chunk_id for _, c in candidates})
+            )
+            crumbs = {p.id: (p.breadcrumbs or []) for p in parents}
+        except Exception as exc:
+            # Metadata is an enrichment, not a requirement — fall back to the
+            # bare chunk rather than failing the whole rerank step.
+            logger.warning("kb.search.rerank_meta_fetch_failed", error=str(exc))
+
+        texts: List[str] = []
+        for sr, child in candidates:
+            header: List[str] = []
+            code = codes.get(sr.doc_id, "").strip()
+            if code:
+                # Its own labelled line, not buried in the title: the
+                # identifier-style questions ask for exactly this string.
+                header.append(f"Nomor: {code}")
+            title = titles.get(sr.doc_id, "").strip()
+            if title:
+                header.append(f"Dokumen: {title}")
+            year = released.get(sr.doc_id)
+            if year is not None:
+                header.append(f"Tahun: {year.year}")
+            path = [c for c in crumbs.get(child.parent_chunk_id, []) if c]
+            if path:
+                header.append("Bagian: " + " > ".join(path))
+            texts.append(
+                ("\n".join(header) + "\n\n" + child.text) if header else child.text
+            )
+        return texts
 
     async def _fallback_parent_search(
         self,
@@ -347,6 +584,8 @@ class SearchService:
         }
 
         for ctx in primary_contexts:
+            if len(sibling_contexts) >= MAX_SIBLING_CONTEXTS:
+                break
             parent = parent_map.get(ctx.parent_chunk_id)
             if not parent or not getattr(parent, "parent_id", None):
                 continue
@@ -358,7 +597,11 @@ class SearchService:
                 continue
 
             for sib in siblings:
+                if len(sibling_contexts) >= MAX_SIBLING_CONTEXTS:
+                    break
                 if sib.id in seen_parent_ids:
+                    continue
+                if len(sib.text or "") < MIN_HYDRATED_CHARS:
                     continue
                 seen_parent_ids.add(sib.id)
                 sibling_contexts.append(
@@ -403,8 +646,12 @@ class SearchService:
         if not primary_contexts:
             return []
 
-        # Collect all text to scan for cross-references
-        path_prefixes: Set[str] = set()
+        # Collect cross-reference prefixes in *first-appearance* order, walking
+        # primaries best-first. A set would iterate in hash order, which varies
+        # with PYTHONHASHSEED — the surviving cross-refs would then differ
+        # between runs of the same query.
+        path_prefixes: List[str] = []
+        seen_prefixes: Set[str] = set()
         for ctx in primary_contexts:
             texts_to_scan = []
             if ctx.child_text:
@@ -412,24 +659,36 @@ class SearchService:
             texts_to_scan.append(ctx.text)
 
             for text in texts_to_scan:
-                prefixes = self._extract_cross_references(text)
-                path_prefixes.update(prefixes)
+                for prefix in self._extract_cross_references(text):
+                    if prefix not in seen_prefixes:
+                        seen_prefixes.add(prefix)
+                        path_prefixes.append(prefix)
 
         if not path_prefixes:
             return []
+
+        # References from the highest-ranked primaries are the ones worth
+        # spending queries on.
+        path_prefixes = path_prefixes[:MAX_CROSS_REF_PREFIXES]
 
         cross_ref_contexts: List[RetrievedContext] = []
         seen_ids: Set[str] = {c.parent_chunk_id for c in primary_contexts}
 
         for prefix in path_prefixes:
+            if len(cross_ref_contexts) >= MAX_CROSS_REF_CONTEXTS:
+                break
             try:
                 referenced = await self.kb_repo.get_chunks_by_path_prefix(prefix)
             except Exception as exc:
                 logger.warning("kb.search.crossref_fetch_failed", prefix=prefix, error=str(exc))
                 continue
 
-            for ref in referenced:
+            for ref in referenced[:MAX_CHUNKS_PER_CROSS_REF]:
+                if len(cross_ref_contexts) >= MAX_CROSS_REF_CONTEXTS:
+                    break
                 if ref.id in seen_ids:
+                    continue
+                if len(ref.text or "") < MIN_HYDRATED_CHARS:
                     continue
                 seen_ids.add(ref.id)
                 cross_ref_contexts.append(

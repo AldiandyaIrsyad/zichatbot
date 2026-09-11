@@ -220,9 +220,15 @@ class TestOrchestration:
     def test_family_quotas_ceil(self) -> None:
         from evals._dataset_gen.build_subset_d import _family_quotas
 
-        q = _family_quotas(6)
-        assert q["factual_flip"] == 2 and q["scope_negation_flip"] == 2 and q["plausible_absent_detail"] == 2
-        assert q["evaluative_graft"] == 6 and q["far_paraphrase"] == 3
+        q5 = _family_quotas(5)
+        assert q5["factual_flip"] == 3 and q5["scope_negation_flip"] == 3
+        assert q5["plausible_absent_detail"] == 3 and q5["evaluative_graft"] == 3
+        assert q5["far_paraphrase"] == 2
+
+        q6 = _family_quotas(6)
+        assert q6["factual_flip"] == 3 and q6["scope_negation_flip"] == 3
+        assert q6["plausible_absent_detail"] == 3 and q6["evaluative_graft"] == 3
+        assert q6["far_paraphrase"] == 3
 
     def test_tag_fills_and_overrides(self) -> None:
         from evals._dataset_gen.build_subset_d import SLICE_FIELDS, _tag
@@ -241,8 +247,8 @@ class TestOrchestration:
             return (f"edited {sentence}", "note")
 
         async def fake_label(**kwargs):
-            # The panel always reads the edit as not_supported, so only the three
-            # not_supported families can pass the gate; evaluative/far are dropped.
+            # The panel always reads the edit as not_supported, so only the two
+            # not_supported families can pass the gate; evaluative/far/absent are dropped.
             row = {
                 "question_id": kwargs["question_id"], "question": kwargs["question"],
                 "full_response": kwargs["full_response"], "sentence_id": 0,
@@ -261,10 +267,10 @@ class TestOrchestration:
             panel=None, generator=None, natural_rows=naturals,
             chunks_by_qid=chunks_by_qid, core_floor=6, seed=0,
         )
-        # Only not_supported families are kept, each capped at its quota (2).
-        assert kept.get("factual_flip") == 2
-        assert kept.get("scope_negation_flip") == 2
-        assert kept.get("plausible_absent_detail") == 2
+        # Only not_supported families are kept, each capped at its quota (3).
+        assert kept.get("factual_flip") == 3
+        assert kept.get("scope_negation_flip") == 3
+        assert kept.get("plausible_absent_detail", 0) == 0  # panel said not_supported != partial
         assert kept.get("evaluative_graft", 0) == 0  # panel said not_supported != partial
         assert kept.get("far_paraphrase", 0) == 0
         assert all(r["construction"] == "perturbed" and r["split"] == "core" for r in core_rows)

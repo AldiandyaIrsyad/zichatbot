@@ -40,10 +40,11 @@ datasets
 accelerate
 FlagEmbedding
 bert-score
+stanza  # Indonesian dependency parser (RAM clause decomposition)
 bs4  # beautifulsoup4
 langchain-core
 langchain-text-splitters
-fitz  # PyMuPDF
+PyMuPDF
 
 # --- PDF partitioning ---
 unstructured

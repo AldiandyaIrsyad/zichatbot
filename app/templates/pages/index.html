@@ -92,25 +92,17 @@ block layout %} {% include "components/sidebar.html" %}
                 Lihat konteks RAG
               </summary>
               <div
-                class="px-2.5 pb-2 pt-1 border-t border-slate-200 dark:border-[#3a3a3a] max-h-64 overflow-y-auto space-y-2"
+                class="px-2.5 pb-2 pt-1 border-t border-slate-200 dark:border-[#3a3a3a] max-h-96 overflow-auto bg-slate-50 dark:bg-[#1b1b1b] rounded-b-lg"
               >
-                <template x-for="(src, i) in msg.sources || []" :key="i">
-                  <div class="border border-slate-100 dark:border-[#2a2a2a] rounded-md px-2 py-1.5">
-                    <div class="font-medium text-slate-600 dark:text-gray-300">
-                      <span x-text="src.title || 'Unknown'"></span>
-                      <span x-show="src.page" x-text="' — Halaman ' + src.page"></span>
-                      <span
-                        x-show="src.breadcrumbs && src.breadcrumbs.length"
-                        x-text="' (' + (src.breadcrumbs || []).join(' > ') + ')'"
-                      ></span>
-                    </div>
-                    <div
-                      x-show="src.text"
-                      class="mt-1 prose prose-sm prose-slate dark:prose-invert max-w-none whitespace-pre-wrap break-words"
-                      x-html="renderMessage(src.text, index + '-ctx-' + i)"
-                    ></div>
-                  </div>
-                </template>
+                <!-- Raw payload, not prose: this panel is for inspecting what
+                     actually reached the LLM, so the chunk text is shown
+                     verbatim (escaped, then syntax-highlighted) rather than
+                     markdown-rendered. Wrapped rather than side-scrolled: the
+                     chunk bodies are long single-line JSON strings. -->
+                <pre
+                  class="font-mono text-[11px] leading-relaxed text-slate-500 dark:text-gray-400 whitespace-pre-wrap break-words"
+                  x-html="renderContextJson(msg)"
+                ></pre>
               </div>
             </details>
           </template>
@@ -195,6 +187,61 @@ block layout %} {% include "components/sidebar.html" %}
         });
       },
 
+      formatContext(msg) {
+        // Pretty-printed JSON of the retrieved context, for debugging what the
+        // LLM was actually given. "chunks" is the wire name for the per-
+        // document objects; the DB read path calls the same data "sources", so
+        // both are normalized to one shape here. Falls back to the flat joined
+        // string when a message predates the structured payload.
+        const chunks = msg.sources || [];
+        if (!chunks.length) {
+          return msg.context || "";
+        }
+        try {
+          return JSON.stringify({ chunks }, null, 2);
+        } catch (e) {
+          console.error("Failed to stringify RAG context", e);
+          return msg.context || "";
+        }
+      },
+
+      renderContextJson(msg) {
+        // Syntax-highlight the pretty-printed payload. HTML is escaped first
+        // and the only markup added afterwards is our own <span>s, so the
+        // chunk text can never inject nodes; DOMPurify is the second layer.
+        const text = this.formatContext(msg);
+        if (!text) return "";
+
+        const escaped = text
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+
+        // One token per match: a JSON string (optionally a key, i.e. followed
+        // by ":"), a literal, or a number. Quotes are left unescaped above, so
+        // the string alternative still matches after escaping.
+        const TOKEN =
+          /("(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(?:\s*:)?|\b(?:true|false)\b|\bnull\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g;
+
+        const highlighted = escaped.replace(TOKEN, (token) => {
+          let cls;
+          if (token.startsWith('"')) {
+            cls = token.trimEnd().endsWith(":")
+              ? "text-sky-600 dark:text-sky-400 font-medium" // key
+              : "text-emerald-700 dark:text-emerald-400"; // string
+          } else if (token === "true" || token === "false") {
+            cls = "text-purple-600 dark:text-purple-400";
+          } else if (token === "null") {
+            cls = "text-rose-600 dark:text-rose-400";
+          } else {
+            cls = "text-amber-600 dark:text-amber-400";
+          }
+          return `<span class="${cls}">${token}</span>`;
+        });
+
+        return DOMPurify.sanitize(highlighted);
+      },
+
       renderMessage(content, msgIndex) {
         if (!content) return "";
 
@@ -207,39 +254,37 @@ block layout %} {% include "components/sidebar.html" %}
         // Transform citations BEFORE DOMPurify and BEFORE marked.parse
         // (to prevent marked from turning *...* into <em>...</em>)
         let markdown = content.replace(
-          /\s*\*\((Supported|Contradiction|Neutral):\s*([0-9.]+)(?:;\s*(.+?)(?:;\s*Page\s*(\d+))?(?:;\s*DocID:([\w-]+))?(?:;\s*Evidence:"([^"]*)")?)?\)\*/g,
-          (match, status, scoreStr, source, page, docId, evidence) => {
-            const score = parseFloat(scoreStr);
+          /\s*\*\((?:(Supported|Neutral|Contradicted):\s*([0-9.]+)\s*;\s*Neutral:\s*([0-9.]+)\s*;\s*Contradicted:\s*([0-9.]+)(?:;\s*(?!\s*(?:Page\s|DocID:|Evidence:"))([^;]+?))?(?:;\s*Page\s*(\d+))?(?:;\s*DocID:([\w-]+))?(?:;\s*Evidence:"([^"]*)")?|(Unverified))\s*\)\*/g,
+          (match, status, supScoreStr, neuScoreStr, conScoreStr, source, page, docId, evidence, unverified) => {
+            const sup = supScoreStr ? parseFloat(supScoreStr) : 0;
+            const neu = neuScoreStr ? parseFloat(neuScoreStr) : 0;
+            const con = conScoreStr ? parseFloat(conScoreStr) : 0;
 
-            // Grade the badge color by score, not just by label, so a
-            // barely-entailed sentence (e.g. 0.55) reads differently from
-            // a strongly-entailed one (e.g. 0.95) at a glance.
+            // Show all three scores; color by the dominant class.
             let bgColor = "bg-gray-500";
             let textColor = "text-white";
-            let tierLabel = status;
-            if (status === "Supported") {
-              if (score >= 0.85) {
-                bgColor = "bg-green-600";
-                tierLabel = "Didukung kuat";
-              } else if (score >= 0.7) {
-                bgColor = "bg-green-500";
-                tierLabel = "Didukung";
+            let tierLabel;
+            let scoreLine;
+
+            if (unverified) {
+              tierLabel = "Tidak terverifikasi";
+              scoreLine = "Klaim tanpa kutipan sumber";
+            } else {
+              const dominant = Math.max(sup, neu, con);
+              if (dominant === con) {
+                bgColor = con >= 0.85 ? "bg-red-600" : "bg-orange-400";
+                tierLabel = con >= 0.85 ? "Kontradiksi kuat" : "Kemungkinan kontradiksi";
+              } else if (dominant === sup) {
+                bgColor = sup >= 0.85 ? "bg-green-600" : sup >= 0.7 ? "bg-green-500" : "bg-green-300";
+                textColor = sup >= 0.7 ? "text-white" : "text-green-950";
+                tierLabel = sup >= 0.85 ? "Didukung kuat" : sup >= 0.7 ? "Didukung" : "Sedikit didukung";
               } else {
-                bgColor = "bg-green-300";
-                textColor = "text-green-950";
-                tierLabel = "Sedikit didukung";
+                tierLabel = "Netral";
               }
-            } else if (status === "Contradiction") {
-              if (score >= 0.85) {
-                bgColor = "bg-red-600";
-                tierLabel = "Kontradiksi kuat";
-              } else {
-                bgColor = "bg-orange-400";
-                tierLabel = "Kemungkinan kontradiksi";
-              }
+              scoreLine = `Didukung: ${sup.toFixed(2)} · Netral: ${neu.toFixed(2)} · Kontradiksi: ${con.toFixed(2)}`;
             }
 
-            let tooltip = `<strong>${tierLabel}</strong>: ${score.toFixed(2)}`;
+            let tooltip = `<strong>${tierLabel}</strong><br>${scoreLine}`;
             if (source)
               tooltip += `<br><span class="text-slate-300">Source:</span> ${source}`;
             if (page)
@@ -406,10 +451,9 @@ block layout %} {% include "components/sidebar.html" %}
               }
               if (evt.type === "context") {
                 this.messages[llmIndex].context = evt.content;
-                // The wire event carries "chunks" (the name build_subset_d.py
-                // and chat_viz.py also read); the DB read path calls the same
-                // data "sources". Map it here so the live turn and a reloaded
-                // session render identically.
+                // The wire event carries "chunks" (document-level objects);
+                // the DB read path calls the same data "sources". Map it here
+                // so the live turn and a reloaded session render identically.
                 this.messages[llmIndex].sources = evt.chunks || [];
               } else if (evt.type === "chunk") {
                 this.messages[llmIndex].content += evt.content;

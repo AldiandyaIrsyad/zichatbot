@@ -1,0 +1,32 @@
+# Keep the build context small: without this, `docker build` ships the venvs,
+# the uploaded corpus and the Postgres backups to the daemon on every build.
+.git
+.venv
+.venv-mineru
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+
+# Runtime state and data: mounted as volumes, never baked into the image.
+uploads/
+backups/
+logs/
+models/
+qdrant_storage/
+postgres_data/
+
+# Secrets: the image must not carry credentials. .env is supplied at run time
+# via `env_file` in docker-compose.yaml.
+.env
+.env.*
+!.env.example
+
+# Experiment and documentation artifacts, none of which the app imports.
+post_sidang_exp/
+scripts/
+test/
+docs/
+*.md
+*.pdf

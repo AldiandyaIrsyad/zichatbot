@@ -6,13 +6,15 @@ and ``kb/`` — the boundary where dependency inversion is resolved.
 """
 
 from typing import Optional
+from functools import lru_cache
 
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.shared.db import get_db_session
 from app.chat.config import get_chat_config
-from app.chat.infra import LLMConnection, PromptGuardClient, NLIClient, PostgresChatRepository, PdfTextExtractor
+from app.kb.config import get_retrieval_settings
+from app.chat.infra import LLMConnection, PromptGuardClient, PostgresChatRepository, PdfTextExtractor
 from app.chat.infra.hyde_expander import HyDEExpander
 from app.chat.application.attachment_service import AttachmentService
 from app.chat.application.chat_service import ChatService
@@ -27,6 +29,13 @@ from app.kb.infra import PostgresKBRepository, QdrantStore, BGEM3Embeddings, Inf
 from app.kb.application.search_service import SearchService
 from app.kb.domain.interfaces import IQueryExpander
 
+from app.guardrails.nli import (
+    INLIModel,
+    LabelSpace,
+    NLIModelKind,
+    NLIModelSpec,
+    build_nli_model,
+)
 from app.guardrails.ivm.checkers import (
     LLMJudgeRelevanceChecker,
     NliEntailmentRelevanceChecker,
@@ -38,16 +47,25 @@ from app.guardrails.ivm.judge import LLMJudge
 from app.guardrails.ivm.relevance_service import RelevanceService
 from app.guardrails.ivm.service import IVMService
 from app.guardrails.ram.service import RAMService
+from app.guardrails.ram.clause_splitter import ClauseSplitter
 
 async def get_chat_repo(db: AsyncSession = Depends(get_db_session)) -> PostgresChatRepository:
     """Provides ``IChatRepository`` via Postgres, bound to the request-scoped DB session."""
     return PostgresChatRepository(db)
 
+@lru_cache
 def get_llm_connection() -> LLMConnection:
-    """Provides ``ILLMConnection`` — a fresh OpenAI-compatible client per call (not cached),
-    pointed at ``ChatConfig``'s configured LLM backend."""
+    """Provides ``ILLMConnection`` — a process-lifetime singleton (cached),
+    pointed at ``ChatConfig``'s configured LLM backend. The underlying
+    ``AsyncOpenAI`` client is connection-pooled/thread-safe, so a single
+    instance is shared across requests and closed on shutdown in ``main.py``."""
     config = get_chat_config()
-    return LLMConnection(base_url=config.llm_base_url, api_key=config.llm_api_key)
+    return LLMConnection(
+        base_url=config.llm_base_url,
+        api_key=config.llm_api_key,
+        max_concurrency=config.llm_max_concurrency,
+        provider_routing=config.provider_routing(),
+    )
 
 def get_prompt_guard_client() -> PromptGuardClient:
     """Provide the local Prompt Guard adapter.
@@ -82,10 +100,50 @@ def get_safety_model() -> ISafetyModel:
 
     return get_prompt_guard_client()
 
-def get_nli_client() -> NLIClient:
-    """Provides ``INLIModel`` (RAM) via the Infinity-hosted NLI model."""
+@lru_cache
+def get_nli_client() -> INLIModel:
+    """Provides ``INLIModel`` (RAM + IVM) — the NLI backend selected by
+    ``ChatConfig.nli_model_kind`` (process-lifetime singleton; the httpx client
+    is closed on shutdown)."""
     config = get_chat_config()
-    return NLIClient(base_url=config.infinity_url, model=config.nli_model)
+    return build_nli_model(build_spec_for_config(config))
+
+
+def build_spec_for_config(config) -> NLIModelSpec:
+    """Translate ``ChatConfig`` into an :class:`NLIModelSpec`.
+
+    Factored out so tests can build a spec from a plain config object without
+    touching the module-level ``@lru_cache`` singleton. All three backends use
+    the canonical ``config.nli_base_url`` (default http://localhost:8002).
+    """
+    kind = NLIModelKind(config.nli_model_kind)
+    if kind == NLIModelKind.MMBERT:
+        return NLIModelSpec(
+            kind=kind,
+            base_url=config.nli_base_url,
+            model_id=config.nli_mmbert_model,
+            label_space=LabelSpace.THREE_WAY,
+            max_concurrency=config.nli_max_concurrency,
+            max_total_tokens=2000,
+            max_hypothesis_tokens=150,
+        )
+    if kind == NLIModelKind.ZEROSHOT:
+        return NLIModelSpec(
+            kind=kind,
+            base_url=config.nli_base_url,
+            model_id=config.nli_zeroshot_model,
+            label_space=LabelSpace.BINARY,
+            max_concurrency=config.nli_max_concurrency,
+        )
+    # Was config.infinity_url; now the in-house nli-indoroberta container.
+    # Same model, same /classify contract — Infinity is being retired.
+    return NLIModelSpec(
+        kind=NLIModelKind.INDO_ROBERTA,
+        base_url=config.nli_base_url,
+        model_id=config.nli_model,
+        label_space=LabelSpace.THREE_WAY,
+        max_concurrency=config.nli_max_concurrency,
+    )
 
 def get_ivm_service(
     safety_client: ISafetyModel = Depends(get_safety_model)
@@ -109,7 +167,7 @@ def get_attachment_service(
     return AttachmentService(extractor=extractor, ivm_service=ivm_service)
 
 def get_relevance_checker(
-    nli_client: NLIClient = Depends(get_nli_client),
+    nli_client: INLIModel = Depends(get_nli_client),
 ) -> IRelevanceChecker:
     """Override ``app.kb.dependency.get_relevance_checker`` (via
     ``app.main``'s ``dependency_overrides``) since the LLM-as-judge check needs
@@ -127,7 +185,7 @@ def get_relevance_checker(
             threshold=config.ood_nli_entailment_threshold,
         )
 
-    judge_llm = LLMConnection(base_url=config.llm_base_url, api_key=config.llm_api_key)
+    judge_llm = get_llm_connection()
     judge = LLMJudge(
         llm_connection=judge_llm,
         model=config.llm_model,
@@ -169,17 +227,28 @@ def get_query_expander(
     )
 
 def get_ram_service(
-    nli_client: NLIClient = Depends(get_nli_client),
-    reranker: Optional[InfinityReranker] = Depends(get_reranker)
+    nli_client: INLIModel = Depends(get_nli_client),
+    reranker: Optional[InfinityReranker] = Depends(get_reranker),
 ) -> RAMService:
-    """Provides the RAM application service (per-sentence citation/hallucination assessment)."""
-    if reranker is None:
-        raise RuntimeError("Reranker is required for RAMService.")
+    """Provides the RAM application service (citation-marker claim assessment).
+
+    The reranker is the same adapter the KB search uses; RAM borrows it to pick
+    the evidence window inside an already-cited chunk.
+    """
+    config = get_chat_config()
     return RAMService(
         nli_model=nli_client,
         reranker_model=reranker,
-        enabled=True
+        enabled=True,
+        entailment_threshold=config.ram_entailment_threshold,
+        contradiction_threshold=config.ram_contradiction_threshold,
     )
+
+
+def get_clause_splitter() -> ClauseSplitter:
+    """Provides the lazy Stanza-backed Indonesian clause splitter for RAM."""
+    config = get_chat_config()
+    return ClauseSplitter(enabled=config.ram_dependency_parse)
 
 async def get_search_service(
     repo: PostgresKBRepository = Depends(get_kb_repo),
@@ -189,12 +258,14 @@ async def get_search_service(
     query_expander: Optional[IQueryExpander] = Depends(get_query_expander),
 ) -> SearchService:
     """Override of kb.dependency.get_search_service injecting HyDE expander."""
+    retrieval = get_retrieval_settings()
     return SearchService(
         text_embedder=embedder,
         vector_store=vstore,
         kb_repo=repo,
         reranker=reranker,
         query_expander=query_expander,
+        rerank_probe=retrieval.rerank_probe,
     )
 
 async def get_chat_service(
@@ -203,7 +274,8 @@ async def get_chat_service(
     search_service: SearchService = Depends(get_search_service),
     ivm_service: IVMService = Depends(get_ivm_service),
     relevance_service: RelevanceService = Depends(get_relevance_service),
-    ram_service: RAMService = Depends(get_ram_service)
+    ram_service: RAMService = Depends(get_ram_service),
+    clause_splitter: ClauseSplitter = Depends(get_clause_splitter),
 ) -> ChatService:
     """Provides ``ChatService``, the top-level application service assembling all chat-pipeline collaborators."""
     config = get_chat_config()
@@ -226,11 +298,13 @@ async def get_chat_service(
         ivm_service=ivm_service,
         relevance_service=relevance_service,
         ram_service=ram_service,
+        clause_splitter=clause_splitter,
         model_name=config.llm_model,
         system_prompt=config.system_prompt,
         temperature=config.llm_temperature,
         attachment_search_excerpt_chars=config.attachment_search_excerpt_chars,
         history_max_tokens=config.history_max_tokens,
+        context_max_tokens=config.context_max_tokens,
         query_condenser=condenser,
         refusal_message=config.refusal_message,
         safety_block_message=config.safety_block_message,

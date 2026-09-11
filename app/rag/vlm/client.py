@@ -16,6 +16,7 @@ stdlib-only purity rule: it calls ``httpx`` directly against OpenRouter/Ollama.
 from __future__ import annotations
 
 import base64
+import io
 import os
 import structlog
 from typing import Optional
@@ -37,6 +38,59 @@ DEFAULT_VLM_PROMPT = (
     "(screenshot) yang diberi anotasi, jelaskan apa yang ditunjuk oleh setiap "
     "anotasi. Jika berupa gambar tabel, jelaskan kolom-kolom dan data pentingnya."
 )
+
+
+
+# Vision endpoints reject oversized payloads: OpenRouter returned "413 Payload
+# Too Large" for the 14-16 MB PNGs that dense A1-sized scans produce, which
+# silently cost 45 pages their transcription in the first full reingest. The cap
+# is enforced here rather than at each render site because images reach the VLM
+# from several paths (full-page renders and Unstructured's extracted figures),
+# and this is the one point they all pass through.
+MAX_IMAGE_BYTES = 4_000_000
+MAX_LONG_EDGE_PX = 2400
+JPEG_QUALITY = 85
+
+
+def encode_image_for_vlm(image_path: str) -> tuple[str, str]:
+    """Return ``(base64_payload, mime_type)``, shrinking the image if needed.
+
+    Downscales the long edge and re-encodes as JPEG only when the file exceeds
+    the size ceiling, so ordinary images are passed through byte-for-byte.
+    """
+    size = os.path.getsize(image_path)
+    ext = os.path.splitext(image_path)[1].lower()
+    mime_map = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+
+    if size <= MAX_IMAGE_BYTES:
+        with open(image_path, "rb") as fh:
+            return base64.b64encode(fh.read()).decode("utf-8"), mime_map.get(ext, "image/png")
+
+    try:
+        from PIL import Image
+
+        with Image.open(image_path) as img:
+            img = img.convert("RGB")
+            long_edge = max(img.size)
+            if long_edge > MAX_LONG_EDGE_PX:
+                scale = MAX_LONG_EDGE_PX / long_edge
+                img = img.resize((max(1, int(img.width * scale)), max(1, int(img.height * scale))))
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+        data = buf.getvalue()
+        logger.info(
+            "vlm.image_downscaled",
+            image=image_path,
+            original_bytes=size,
+            encoded_bytes=len(data),
+        )
+        return base64.b64encode(data).decode("utf-8"), "image/jpeg"
+    except Exception as exc:
+        # Never silently send the oversized original — that is the 413 again.
+        raise RuntimeError(
+            f"image {image_path} is {size} bytes (limit {MAX_IMAGE_BYTES}) and "
+            f"could not be downscaled: {exc}"
+        ) from exc
 
 
 class OpenRouterVLMClient(IVLMEnricher):
@@ -67,13 +121,7 @@ class OpenRouterVLMClient(IVLMEnricher):
         if not os.path.isfile(image_path):
             raise FileNotFoundError(f"Image not found: {image_path}")
 
-        with open(image_path, "rb") as fh:
-            image_b64 = base64.b64encode(fh.read()).decode("utf-8")
-
-        # Determine MIME type from extension
-        ext = os.path.splitext(image_path)[1].lower()
-        mime_map = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
-        mime_type = mime_map.get(ext, "image/png")
+        image_b64, mime_type = encode_image_for_vlm(image_path)
 
         payload = {
             "model": self._model,

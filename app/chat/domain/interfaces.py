@@ -10,8 +10,13 @@ Ports → adapters: :class:`ILLMConnection` → ``llm_connection.LLMConnection``
 """
 
 from dataclasses import dataclass
-from typing import Protocol, AsyncIterator, List, Optional, Dict, Any
+from typing import Protocol, AsyncIterator, Callable, List, Optional, Dict, Any
 from app.chat.domain.models import Session, Message
+
+
+# Re-exported so ``from app.chat.domain.interfaces import LLMUsage`` keeps
+# working; the definitions live in ``usage.py`` alongside the collector.
+from app.chat.domain.usage import LLMUsage, UsageCallback  # noqa: F401
 
 
 class ILLMConnection(Protocol):
@@ -27,8 +32,15 @@ class ILLMConnection(Protocol):
         messages: List[Dict[str, str]],
         max_tokens: int,
         temperature: float = 0.0,
+        *,
+        on_usage: Optional[UsageCallback] = None,
+        call: str = "generation",
     ) -> AsyncIterator[str]:
-        """Stream a chat completion, yielding incremental text fragments."""
+        """Stream a chat completion, yielding incremental text fragments.
+
+        ``on_usage`` receives the call's token accounting once the stream ends.
+        Optional: adapters that cannot report usage simply never call it.
+        """
         ...
 
     async def generate(
@@ -37,6 +49,9 @@ class ILLMConnection(Protocol):
         messages: List[Dict[str, str]],
         max_tokens: int,
         temperature: float = 0.0,
+        *,
+        on_usage: Optional[UsageCallback] = None,
+        call: str = "generation",
     ) -> str:
         """Return a complete (non-streaming) chat completion as one string
         (e.g. for HyDE hypothetical document generation).

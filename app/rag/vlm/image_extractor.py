@@ -18,6 +18,14 @@ import fitz  # PyMuPDF
 
 logger = structlog.get_logger(__name__)
 
+# Ceilings that keep a rendered page inside the VLM endpoint's request limit.
+# OpenRouter returned 413 for ~5 MB PNGs; 2200 px on the long edge keeps dense
+# A3 scans readable while landing comfortably under it.
+MAX_LONG_EDGE_PX = 2200
+MIN_DPI = 72
+MAX_IMAGE_BYTES = 3_500_000
+JPEG_QUALITY = 85
+
 # Drawing-density threshold for flowchart detection: a page with many vector
 # drawings (lines, rectangles, curves) likely holds a flowchart or diagram.
 FLOWCHART_DRAWING_THRESHOLD = 10
@@ -53,7 +61,23 @@ class PyMuPDFImageExtractor:
                 return None
 
             page = doc[page_idx]
-            mat = fitz.Matrix(dpi / 72, dpi / 72)
+            # Scale DPI down for oversized pages so the render stays under the
+            # VLM endpoint's request limit. A large scan at 150 DPI can exceed
+            # 5 MB, which OpenRouter rejects with "413 Payload Too Large" — that
+            # accounted for every VLM failure in the first full reingest (45 of
+            # 1845 calls), silently leaving those pages untranscribed.
+            rect = page.rect
+            effective_dpi = dpi
+            long_edge_px = max(rect.width, rect.height) * dpi / 72
+            if long_edge_px > MAX_LONG_EDGE_PX:
+                effective_dpi = max(MIN_DPI, dpi * MAX_LONG_EDGE_PX / long_edge_px)
+                logger.info(
+                    "image.dpi_reduced",
+                    page=page_number,
+                    requested_dpi=dpi,
+                    effective_dpi=round(effective_dpi),
+                )
+            mat = fitz.Matrix(effective_dpi / 72, effective_dpi / 72)
             pix = page.get_pixmap(matrix=mat)
 
             output_path = os.path.join(
@@ -61,6 +85,23 @@ class PyMuPDFImageExtractor:
                 f"page_{page_number}.png",
             )
             pix.save(output_path)
+
+            # PNG of a dense scan can still be large; fall back to JPEG, which
+            # is typically 5-10x smaller for photographic scan content.
+            if os.path.getsize(output_path) > MAX_IMAGE_BYTES:
+                jpeg_path = os.path.join(output_dir, f"page_{page_number}.jpg")
+                pix.save(jpeg_path, jpg_quality=JPEG_QUALITY)
+                if os.path.getsize(jpeg_path) < os.path.getsize(output_path):
+                    logger.info(
+                        "image.recompressed_jpeg",
+                        page=page_number,
+                        png_bytes=os.path.getsize(output_path),
+                        jpg_bytes=os.path.getsize(jpeg_path),
+                    )
+                    os.remove(output_path)
+                    output_path = jpeg_path
+                else:
+                    os.remove(jpeg_path)
             doc.close()
 
             logger.debug("image.extracted", path=output_path, page=page_number)

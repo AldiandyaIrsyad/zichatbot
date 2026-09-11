@@ -42,6 +42,37 @@ class ChatConfig(BaseSettings):
     llm_temperature: float = Field(
         default=0.0,
         description="Sampling temperature for generation (0.0 = deterministic)",
+        validation_alias="CHAT_LLM_TEMPERATURE",
+    )
+    llm_provider_order: str = Field(
+        default="",
+        description=(
+            "OpenRouter provider preference, highest first (e.g. 'DeepInfra'). "
+            "A gateway model is served by many providers at different prices — "
+            "deepseek-v4-flash-0731 spans $0.0798-$0.14 per M input tokens — so "
+            "leaving this empty means the bill depends on who happens to be "
+            "routed to. Comma-separated; empty disables pinning (and any "
+            "non-OpenRouter backend ignores it)."
+        ),
+        validation_alias="CHAT_LLM_PROVIDER_ORDER",
+    )
+    llm_provider_quantizations: str = Field(
+        default="",
+        description=(
+            "Restrict routing to these quantizations (e.g. 'fp4'), "
+            "comma-separated. Quantization changes both price and output "
+            "quality, so pinning it keeps a measured cost figure reproducible."
+        ),
+        validation_alias="CHAT_LLM_PROVIDER_QUANTIZATIONS",
+    )
+    llm_allow_fallbacks: bool = Field(
+        default=True,
+        description=(
+            "Let OpenRouter fall back to an unpinned provider when the preferred "
+            "one is unavailable. True favours availability; False favours a "
+            "predictable price and is what a cost measurement needs."
+        ),
+        validation_alias="CHAT_LLM_ALLOW_FALLBACKS",
     )
     system_prompt: str = Field(
         default=DEFAULT_SYSTEM_PROMPT_ID,
@@ -53,7 +84,115 @@ class ChatConfig(BaseSettings):
     infinity_url: str = Field(default="http://localhost:7997", description="Infinity server URL", validation_alias="INFINITY_BASE_URL")
     prompt_guard_model: str = Field(default="meta-llama/Llama-Prompt-Guard-2-86M", validation_alias="INFINITY_PROMPT_GUARD_MODEL")
     nli_model: str = Field(default="StevenLimcorn/indo-roberta-indonli", validation_alias="INFINITY_NLI_MODEL")
-    security_threshold: float = Field(default=0.75, description="Threshold for prompt injection detection")
+    security_threshold: float = Field(
+        default=0.75,
+        description="Threshold for prompt injection detection",
+        validation_alias="CHAT_SECURITY_THRESHOLD",
+    )
+
+    # --- NLI backend selection (RAM + IVM nli_entailment) ---
+    nli_model_kind: Literal["indo_roberta", "mmbert", "zeroshot"] = Field(
+        default="mmbert",
+        description=(
+            "Which NLI backend RAM and the IVM nli_entailment checker use. "
+            "'mmbert' = the IndoNLI fine-tune on the dedicated NLI service "
+            "(default: macro-F1 0.763 lay / 0.572 expert, against "
+            "indo-roberta's 0.727 / 0.554); 'indo_roberta' = "
+            "indo-roberta-indonli on the same server; 'zeroshot' = "
+            "bge-m3-zeroshot-v2.0-c (binary baseline, benchmark only). "
+            "The kind also selects the wire format — mmbert posts "
+            "{premise, hypothesis} pairs, indo_roberta posts one joined string — "
+            "so it must match the container that is actually running, or every "
+            "request returns HTTP 422."
+        ),
+        validation_alias="CHAT_NLI_MODEL_KIND",
+    )
+    nli_base_url: str = Field(
+        default="http://localhost:8002",
+        description=(
+            "Canonical base URL of the active NLI server (default "
+            "http://localhost:8002, matching CHAT_NLI_PORT). All three NLI "
+            "backends (indo_roberta, mmbert, zeroshot) share this endpoint."
+        ),
+        validation_alias="CHAT_NLI_BASE_URL",
+    )
+    nli_mmbert_model: str = Field(
+        default="/models/mmbert_nli_id",
+        description="Model id/path for the mmBERT fine-tune on the NLI server.",
+        validation_alias="CHAT_NLI_MMBERT_MODEL",
+    )
+    nli_zeroshot_model: str = Field(
+        default="MoritzLaurer/bge-m3-zeroshot-v2.0-c",
+        description="Model id for the zero-shot NLI baseline.",
+        validation_alias="CHAT_NLI_ZEROSHOT_MODEL",
+    )
+
+    @property
+    def nli_indo_roberta_base_url(self) -> str:
+        """Compatibility shim for legacy per-kind endpoint field."""
+        return self.nli_base_url
+
+    @property
+    def nli_mmbert_base_url(self) -> str:
+        """Compatibility shim for legacy per-kind endpoint field."""
+        return self.nli_base_url
+
+    @property
+    def nli_zeroshot_base_url(self) -> str:
+        """Compatibility shim for legacy per-kind endpoint field."""
+        return self.nli_base_url
+
+    # --- RAM claim decomposition ---
+    ram_dependency_parse: bool = Field(
+        default=True,
+        description=(
+            "Use an Indonesian dependency parser (Stanza 'id') to split "
+            "compound sentences into atomic clauses before NLI verification. "
+            "Falls back to sentence-level splitting when disabled or the "
+            "parser is unavailable."
+        ),
+        validation_alias="CHAT_RAM_DEPENDENCY_PARSE",
+    )
+
+    # --- RAM NLI confidence gates ---
+    ram_entailment_threshold: float = Field(
+        default=0.5,
+        description=(
+            "Minimum NLI entailment score for a claim to be labelled Supported. "
+            "A model-entailment below this is downgraded to Neutral (scores are "
+            "still surfaced in the citation badge)."
+        ),
+        validation_alias="CHAT_RAM_ENTAILMENT_THRESHOLD",
+    )
+    ram_contradiction_threshold: float = Field(
+        default=0.7,
+        description=(
+            "Minimum NLI contradiction score for a claim to be labelled "
+            "Contradicted. A model-contradiction below this is downgraded to "
+            "Neutral (scores are still surfaced in the citation badge)."
+        ),
+        validation_alias="CHAT_RAM_CONTRADICTION_THRESHOLD",
+    )
+
+    # --- Outbound concurrency caps (backpressure) ---
+    llm_max_concurrency: int = Field(
+        default=4,
+        description=(
+            "Max concurrent in-flight LLM requests across all chat callers "
+            "(generation, condenser, HyDE, judge). Excess requests await a "
+            "semaphore slot."
+        ),
+        validation_alias="CHAT_LLM_MAX_CONCURRENCY",
+    )
+    nli_max_concurrency: int = Field(
+        default=8,
+        description=(
+            "Max concurrent in-flight NLI requests to the Infinity server "
+            "(per-sentence RAM verification). Kept separate from the LLM cap "
+            "so a RAM burst doesn't starve generation."
+        ),
+        validation_alias="CHAT_NLI_MAX_CONCURRENCY",
+    )
 
     # --- Safety backend selection (IVM) ---
     # Mirrors ``ood_method``: one env var swaps the ISafetyModel adapter so the
@@ -118,11 +257,16 @@ class ChatConfig(BaseSettings):
         validation_alias="CHAT_OOD_METHOD",
     )
     ood_similarity_threshold: float = Field(
-        default=0.02,
+        default=0.15,
         description=(
             "Min top-1 retrieval (RRF fusion) score for the 'similarity_threshold' "
-            "OOD method — placeholder, calibrate empirically against this KB's own "
-            "score distribution"
+            "OOD method. Calibrated against this KB: 10 in-domain queries scored "
+            "0.28-0.83, while off-topic ones split into a clearly-out cluster "
+            "(0.08-0.10) and a confusable tail that still scores 0.33-0.50. The "
+            "two distributions overlap, so this gate is deliberately lenient — it "
+            "rejects only the clearly-out cluster and lets a confusable query "
+            "through to the LLM, which will decline from the retrieved context. "
+            "Recalibrate after any change to chunking, embeddings, or fusion."
         ),
         validation_alias="CHAT_OOD_SIMILARITY_THRESHOLD",
     )
@@ -168,6 +312,16 @@ class ChatConfig(BaseSettings):
             "prompt, retrieved context, and current turn are separate."
         ),
         validation_alias="CHAT_HISTORY_MAX_TOKENS",
+    )
+    context_max_tokens: int = Field(
+        default=6_000,
+        description=(
+            "Approximate token budget for the retrieved context block fed to "
+            "the LLM. Contexts are kept in retrieval order and truncated once "
+            "the budget is exceeded (the RAM citation mapping uses the same "
+            "clamped list, so [CIT:N] numbering stays consistent)."
+        ),
+        validation_alias="CHAT_CONTEXT_MAX_TOKENS",
     )
     condense_query: bool = Field(
         default=True,
@@ -228,25 +382,51 @@ class ChatConfig(BaseSettings):
     )
     hyde_temperature: float = Field(
         default=0.0,
-        description="Temperature for HyDE generation (0.0 = deterministic)",
+        description=(
+            "Temperature for HyDE generation. 0.0 is deterministic, which makes the "
+            "hyde_num_passages 'variants' near-identical and the ensemble mean no better "
+            "than one passage; raise it (~0.7) when generating more than one."
+        ),
         validation_alias="CHAT_HYDE_TEMPERATURE",
     )
     hyde_num_passages: int = Field(
-        default=3,
+        default=1,
         ge=1,
         le=5,
-        description="Number of independently generated HyDE passages whose dense vectors are averaged",
+        description=(
+            "Number of independently generated HyDE passages whose dense vectors are "
+            "averaged. Each costs one LLM round-trip, and they are the dominant cost of "
+            "a chat request, so the default is a single passage. Raise it (with "
+            "hyde_temperature > 0, or the variants come back near-identical) to trade "
+            "cost for a smoother mean query vector."
+        ),
         validation_alias="CHAT_HYDE_NUM_PASSAGES",
     )
     hyde_system_prompt: str = Field(
         default=(
-            "Write a short Indonesian institutional-legal document passage for retrieval. "
-            "Preserve entities explicitly present in the question, such as institution names, "
-            "roles, procedures, or regulation identifiers. Do not invent article numbers, dates, "
-            "document titles, or facts. Use terminology that a relevant policy or SOP would contain. "
-            "Output only the passage; it is a hypothetical retrieval document, not an answer."
+            "Tulis satu paragraf yang berbunyi seperti kutipan langsung dari pasal, ayat, "
+            "atau lampiran peraturan/keputusan institusi Indonesia yang MEMUAT jawaban "
+            "pertanyaan. Tulis isi ketentuannya sendiri — kategori, golongan, besaran, "
+            "syarat, atau langkahnya — bukan penjelasan tentang di mana informasi itu bisa "
+            "dicari, bukan deskripsi dokumen, dan bukan rujukan ke surat edaran atau situs "
+            "resmi. Pertahankan entitas yang disebut dalam pertanyaan (nama institusi, "
+            "peran, prosedur). Gunakan istilah baku yang akan muncul dalam dokumen aslinya. "
+            "Jangan sebut nomor dokumen atau tanggal. Keluarkan paragrafnya saja."
         ),
-        description="System prompt for HyDE hypothetical document generation — sets the domain/register the model should imitate. May contain a {kb_context} placeholder, filled with the active KB document titles/descriptions.",
+        description=(
+            "System prompt for HyDE hypothetical document generation — sets the domain/register "
+            "the model should imitate. May contain a {kb_context} placeholder, filled with the "
+            "active KB document titles/descriptions.\n\n"
+            "The prompt must push the model to write a passage that *contains* the answer. The "
+            "earlier default forbade inventing facts, so the model hedged — 'informasi dapat "
+            "dilihat dalam Surat Keputusan Rektor Nomor [X]' — producing meta-text *about* a "
+            "decree rather than its provisions. That retrieves the corpus's VLM page "
+            "descriptions (also meta-text about decrees) instead of the article that answers "
+            "the question. Prior default, kept for ablation: 'Write a short Indonesian "
+            "institutional-legal document passage for retrieval. Preserve entities explicitly "
+            "present in the question... Do not invent article numbers, dates, document titles, "
+            "or facts...'"
+        ),
         validation_alias="CHAT_HYDE_SYSTEM_PROMPT",
     )
     hyde_prompt_template: str = Field(
@@ -273,6 +453,24 @@ class ChatConfig(BaseSettings):
         description="TTL (seconds) for the cached {kb_context} grounding block before it's refetched from the KB.",
         validation_alias="CHAT_HYDE_CONTEXT_REFRESH_SECONDS",
     )
+
+    def provider_routing(self) -> dict:
+        """OpenRouter's provider-selection block, or ``{}`` when unpinned.
+
+        Returned empty (rather than `{"allow_fallbacks": true}`) when nothing is
+        pinned, so a non-OpenRouter backend never receives a field it would have
+        to ignore.
+        """
+        order = [p.strip() for p in self.llm_provider_order.split(",") if p.strip()]
+        quants = [q.strip() for q in self.llm_provider_quantizations.split(",") if q.strip()]
+        if not order and not quants:
+            return {}
+        routing: dict = {"allow_fallbacks": self.llm_allow_fallbacks}
+        if order:
+            routing["order"] = order
+        if quants:
+            routing["quantizations"] = quants
+        return routing
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", populate_by_name=True)
 

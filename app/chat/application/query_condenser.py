@@ -90,6 +90,7 @@ class QueryCondenser:
                 messages=messages,
                 max_tokens=_MAX_TOKENS,
                 temperature=0.0,
+                call="condenser",
             ):
                 chunks.append(chunk)
             rewritten = "".join(chunks).strip()

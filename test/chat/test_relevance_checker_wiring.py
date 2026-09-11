@@ -23,8 +23,11 @@ def _fake_config(**overrides):
         llm_base_url="http://x",
         llm_api_key=SecretStr("k"),
         llm_model="m",
+        llm_max_concurrency=4,
         relevance_judge_prompt="p",
         relevance_judge_user_template="Context:\n{context}\n\nQuery: {query}\n\nIs this relevant?",
+        # get_llm_connection asks the config how to pin the OpenRouter provider.
+        provider_routing=lambda: {},
     )
     base.update(overrides)
     return SimpleNamespace(**base)

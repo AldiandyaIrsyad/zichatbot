@@ -14,6 +14,7 @@ Content-type aware:
 Depends only on stdlib ``re``/``uuid`` and ``langchain_text_splitters`` (a pure
 text-splitting utility) — no HTTP/DB imports, per the ``thesis/`` purity rule.
 """
+import os
 import re
 import uuid
 import structlog
@@ -35,6 +36,10 @@ logger = structlog.get_logger(__name__)
 
 # Default chunking parameters
 DEFAULT_PARENT_MAX_CHARS = 4096
+
+# How a table parent is represented among its children. Overridable per-parent
+# via element_metadata["table_child_mode"], or globally with CHUNKING_TABLE_CHILD_MODE.
+TABLE_CHILD_MODE = os.getenv("CHUNKING_TABLE_CHILD_MODE", "both").strip().lower()
 DEFAULT_CHILD_MAX_CHARS = 512
 DEFAULT_CHILD_OVERLAP_CHARS = 50
 
@@ -356,8 +361,9 @@ def split_into_children(
     sentence boundaries); TABLE → :func:`_split_table_children` (Markdown:
     row-group splitting with header repetition; HTML: single child, no split);
     FIGURE → :func:`_split_figure_children` (sentence split on the VLM
-    description). Injects the parent's breadcrumbs into every child so vector
-    search always has the full hierarchical context.
+    description). Children carry pure body text — the hierarchical breadcrumbs
+    are kept structurally (``breadcrumbs``) and appended post-retrieval by the
+    search service, not embedded into the child vector.
     """
     if parent.content_type == ContentType.TABLE:
         children = _split_table_children(parent, max_chars)
@@ -367,15 +373,13 @@ def split_into_children(
         # TEXT and HYBRID both use the standard text splitter
         children = _split_text_children(parent, max_chars, overlap_chars)
 
-    # Drop gibberish children: chunks whose *body* text (excluding the
-    # breadcrumb tag every child under a heading carries, which would otherwise
-    # mask a short/garbage body) is below the minimum threshold carry no
-    # meaningful context. Filters micro-fragments (lone punctuation, single
-    # letters, OCR noise) before embedding/upsert.
+    # Drop gibberish children: chunks whose body text is below the minimum
+    # threshold carry no meaningful context. Filters micro-fragments (lone
+    # punctuation, single letters, OCR noise) before embedding/upsert.
     original_count = len(children)
     children = [
         child for child in children
-        if len(_strip_breadcrumb_tag(child.text, parent.breadcrumbs).strip()) >= MIN_CHILD_TEXT_LENGTH
+        if len(child.text.strip()) >= MIN_CHILD_TEXT_LENGTH
     ]
     dropped = original_count - len(children)
     if dropped > 0:
@@ -402,14 +406,11 @@ def split_into_children(
 
 
 def _build_breadcrumb_tag(breadcrumbs: List[str]) -> str:
-    """Build the breadcrumb tag prepended to every child chunk's text.
+    """Build the breadcrumb path string used for post-retrieval context.
 
-    Deliberately lighter than a bracketed "[Context: ...]" header: parent
-    chunks (what the LLM prompt, frontend, and RAM's splitter use) carry no
-    inline breadcrumb text — ``ParentChunkData.breadcrumbs`` provides that
-    structurally. This tag exists only for embedding-only child chunks, so a
-    plain rendering (no brackets/label) keeps the discriminative signal (e.g.
-    "Pasal 5") without diluting the embedding with a repeated constant string.
+    Kept as a shared helper (and for ``_strip_breadcrumb_tag`` compatibility
+    with the E1 dilution probe and tests). Children no longer embed this tag at
+    ingestion time; the search service appends it to the retrieved parent text.
     Returns "" if there are no breadcrumbs.
     """
     if not breadcrumbs:
@@ -434,12 +435,10 @@ def _split_text_children(
 ) -> List[ChildChunkData]:
     """Split narrative text into child chunks using RecursiveCharacterTextSplitter.
 
-    Respects sentence and word boundaries. Prepends a breadcrumb tag to every
-    child so vector search always has hierarchical context (the parent text
-    itself carries no such tag — see ``_build_breadcrumb_tag``).
+    Respects sentence and word boundaries. Children contain only body text —
+    no breadcrumb tag — so embeddings stay discriminative; the hierarchy is
+    appended post-retrieval.
     """
-    breadcrumb_tag = _build_breadcrumb_tag(parent.breadcrumbs)
-
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=max_chars,
         chunk_overlap=overlap_chars,
@@ -455,20 +454,215 @@ def _split_text_children(
         if not child_text:
             continue
 
-        final_child_text = breadcrumb_tag + child_text
-
         children.append(
             ChildChunkData(
                 id=str(uuid.uuid4()),
                 parent_chunk_id=parent.id,
                 doc_id=parent.doc_id,
-                text=final_child_text,
+                text=child_text,
                 page=parent.page,
                 breadcrumbs=parent.breadcrumbs,
                 content_type=parent.content_type,
             )
         )
     return children
+
+
+
+# Indonesian legal drafting introduces every abbreviation explicitly, e.g.
+# "Uang Kuliah Tunggal yang selanjutnya disingkat UKT adalah ...". That sentence
+# is the document's own authority on which acronym its readers — and therefore
+# its askers — will use, so acronyms are mined from it rather than guessed from
+# capital letters (initialising the title's word runs yields KTU/TUK noise).
+_ACRONYM_DEF_RE = re.compile(
+    r"([A-Z][A-Za-z/\-]*(?:\s+[A-Za-z/\-]+){0,6}?)\s+yang\s+selanjutnya\s+"
+    r"(?:disingkat|disebut)\s+(?:dengan\s+)?([A-Z][A-Za-z]{1,9})\b"
+)
+
+# Cells like "Rp. 3.390.000" / "3.390.000" — enough to say the table quantifies
+# money without hard-coding this corpus's column names.
+_MONEY_CELL_RE = re.compile(r"(?:Rp\.?\s*)?\d{1,3}(?:\.\d{3}){2,}")
+
+
+def extract_acronym_definitions(text: str) -> Dict[str, str]:
+    """Map long form -> acronym for every abbreviation a document defines.
+
+    Used to make a table summary searchable by the name a question actually
+    uses. The tariff table's title says "Uang Kuliah Tunggal" while questions
+    say "UKT", and a reranker scores the un-expanded summary at 0.002 against
+    such a question — effectively unreachable.
+    """
+    out: Dict[str, str] = {}
+    for long_form, acronym in _ACRONYM_DEF_RE.findall(text or ""):
+        long_form = long_form.strip()
+        # A long form shorter than its acronym is a mis-capture, not a definition.
+        if len(long_form) > len(acronym):
+            out.setdefault(long_form, acronym)
+    return out
+
+
+# Words that never carry an initial in an Indonesian acronym, so they break a
+# run rather than contributing a letter ("Uang Kuliah Tunggal" -> UKT, and the
+# preceding "dan" keeps the run from swallowing the previous clause).
+_ACRONYM_STOPWORDS = frozenset(
+    {"dan", "atau", "bagi", "di", "ke", "dari", "untuk", "yang", "pada", "the"}
+)
+
+
+def infer_acronyms(doc_title: str, doc_text: str) -> Dict[str, str]:
+    """Map long form -> acronym for a document, by definition then by usage.
+
+    Two strategies, because the documents that most need this do not define
+    their terms. The tariff schedule (``003 Tahun 2022``) writes "UKT" nine
+    times and never once says "yang selanjutnya disingkat", so
+    :func:`extract_acronym_definitions` alone leaves its table unsearchable by
+    the acronym every question uses.
+
+    The fallback initialises runs of capitalised words in the title and keeps
+    only those whose initials actually occur in the document. That verification
+    is what makes it safe: "Uang Kuliah Tunggal" yields UKT, which appears, so
+    it is kept; the overlapping "Kelompok Tarif Uang" yields KTU, which does
+    not appear, so the noise is discarded.
+    """
+    acronyms = extract_acronym_definitions(doc_text)
+
+    words = re.findall(r"[\w/]+", doc_title or "")
+    runs: List[List[str]] = []
+    current: List[str] = []
+    for word in words:
+        if word[:1].isupper() and word.lower() not in _ACRONYM_STOPWORDS:
+            current.append(word)
+        else:
+            if len(current) > 1:
+                runs.append(current)
+            current = []
+    if len(current) > 1:
+        runs.append(current)
+
+    for run in runs:
+        for size in range(2, min(len(run), 5) + 1):
+            for start in range(len(run) - size + 1):
+                window = run[start : start + size]
+                candidate = "".join(w[0].upper() for w in window)
+                long_form = " ".join(window)
+                if long_form in acronyms or candidate in acronyms.values():
+                    continue
+                if re.search(rf"\b{re.escape(candidate)}\b", doc_text or ""):
+                    acronyms[long_form] = candidate
+    return acronyms
+
+
+def derive_table_summary(
+    table_text: str,
+    breadcrumbs: Optional[List[str]] = None,
+    max_labels: int = 40,
+    doc_title: str = "",
+    acronyms: Optional[Dict[str, str]] = None,
+) -> str:
+    """Describe what a table enumerates, for embedding in place of its cells.
+
+    A table's cells are a poor search target: "berapa UKT untuk Pendidikan
+    Sejarah" has to match a row that is mostly digits and column labels. This
+    builds a sentence out of the parts that *do* carry meaning — the section
+    heading, the column headers, and the row labels — so the vector describes
+    the table's subject rather than its numbers. The full table still reaches
+    the LLM, because retrieval hydrates the parent (see
+    ``search_service`` step 6).
+
+    Deterministic and free: no model call. Intended as the baseline a VLM-written
+    summary has to beat.
+    """
+    lines = [ln.strip() for ln in table_text.splitlines() if ln.strip().startswith("|")]
+    if not lines:
+        return ""
+
+    def cells(line: str) -> List[str]:
+        return [c.strip() for c in line.strip().strip("|").split("|")]
+
+    # Header = first row that is not the --- separator.
+    header: List[str] = []
+    for line in lines[:3]:
+        if not all(c in "|:- " for c in line):
+            header = [c for c in cells(line) if c and c != "[merged]"]
+            break
+
+    # Row labels = the descriptive cells of each body row: the key a question
+    # actually names ("Pendidikan Sejarah"), not its values. Taking merely the
+    # first non-numeric cell picks up the code column instead ("B025"), because
+    # these tables run | Unit Kerja | Kode | Jenjang | Departemen/Program Studi |
+    # — so prefer the longest text cell in the row and keep short codes out.
+    labels: List[str] = []
+    for line in lines[1:]:
+        if all(c in "|:- " for c in line):
+            continue
+        candidates = [
+            cell
+            for cell in cells(line)
+            if cell
+            and cell != "[merged]"
+            and not re.fullmatch(r"[\d.,\s]+", cell)
+            and not re.fullmatch(r"[A-Z]?\d{2,4}[A-Z]?", cell)   # codes: B025, A015
+            and not re.fullmatch(r"[SD]\d", cell)                # jenjang: S1, D3
+            and cell not in header
+            and len(cell) >= 6
+        ]
+        if candidates:
+            labels.append(max(candidates, key=len))
+        if len(labels) >= max_labels:
+            break
+
+    # Lead with a sentence phrased the way a question is, not a schema dump.
+    # "Kolom: Unit Kerja, Kode, Jenjang..." shares almost no vocabulary with
+    # "berapa biaya UKT?", so a general question could not reach the table even
+    # when its document ranked first. The document title carries the subject
+    # ("Kelompok Tarif Uang Kuliah Tunggal"), and the header supplies what the
+    # table quantifies; both are what a reader would name.
+    subject = doc_title.strip() or (" > ".join(breadcrumbs) if breadcrumbs else "")
+    lead_bits = ["Tabel"]
+    if subject:
+        lead_bits.append(subject)
+    else:
+        # No title to name the subject, so fall back to the longest header cell,
+        # which is the closest thing the table itself offers. With a title this
+        # clause is skipped: it added "— daftar Unit Kerja" (merely the first
+        # column) to a title that already said "Kelompok Tarif Uang Kuliah
+        # Tunggal".
+        longest = max(
+            (h for h in header if not re.fullmatch(r"[\d.,\s]+", h)),
+            key=len,
+            default="",
+        )
+        if longest:
+            lead_bits.append(f"daftar {longest}")
+    lead = " ".join(lead_bits).strip()
+
+    # Name the subject the way a question names it. The title spells the term
+    # out ("...Tarif Uang Kuliah Tunggal") but questions use the acronym
+    # ("berapa biaya UKT"), and without the expansion the two share almost no
+    # vocabulary. Measured on bge-reranker-v2-m3 against "berapa biaya UKT":
+    # 0.0019 without, 0.33 with this and the cost clause below.
+    for long_form, acronym in (acronyms or {}).items():
+        if long_form and long_form in lead and acronym not in lead:
+            lead = lead.replace(long_form, f"{long_form} ({acronym})", 1)
+
+    if labels:
+        lead += f". Memuat {len(dict.fromkeys(labels))} baris"
+    lead += "."
+
+    parts: List[str] = [lead]
+
+    # A table of money is what "berapa biaya/tarif ...?" is asking for, but the
+    # cells are digits and the headers say "Kelompok 1". Say so in words, once,
+    # only when the cells actually carry money.
+    if _MONEY_CELL_RE.search(table_text):
+        parts.append("Memuat besaran biaya atau tarif dalam Rupiah.")
+    if breadcrumbs and doc_title:
+        parts.append(" > ".join(breadcrumbs))
+    if header:
+        parts.append("Kolom: " + ", ".join(dict.fromkeys(header)))
+    if labels:
+        parts.append("Baris: " + ", ".join(dict.fromkeys(labels)))
+    return " ".join(p for p in parts if p).strip()
 
 
 def _split_table_children(
@@ -490,7 +684,6 @@ def _split_table_children(
     extra child — the summary is vector-searched while the full table (parent)
     is retrieved for LLM context. Returns at least one child.
     """
-    breadcrumb_tag = _build_breadcrumb_tag(parent.breadcrumbs)
     children: List[ChildChunkData] = []
 
     table_text = parent.text
@@ -505,7 +698,6 @@ def _split_table_children(
         row_group_children = _split_markdown_table_rows(
             parent=parent,
             raw_table=table_text,
-            breadcrumb_tag=breadcrumb_tag,
             max_chars=max_chars,
         )
         children.extend(row_group_children)
@@ -516,17 +708,35 @@ def _split_table_children(
                 id=str(uuid.uuid4()),
                 parent_chunk_id=parent.id,
                 doc_id=parent.doc_id,
-                text=breadcrumb_tag + table_text,
+                text=table_text,
                 page=parent.page,
                 breadcrumbs=parent.breadcrumbs,
                 content_type=ContentType.TABLE,
             )
         )
 
-    # Always append the table summary child if available
+    # Summary child: embedded in place of (or alongside) the rows, while the
+    # parent still supplies the full table at retrieval time. Falls back to a
+    # derived summary when no producer set one, so the behaviour does not depend
+    # on the parser having provided a caption.
     table_summary = parent.element_metadata.get("table_summary")
-    if table_summary and isinstance(table_summary, str) and table_summary.strip():
-        summary_text = breadcrumb_tag + table_summary.strip()
+    if not (isinstance(table_summary, str) and table_summary.strip()):
+        raw_acronyms = parent.element_metadata.get("acronyms")
+        table_summary = derive_table_summary(
+            table_text,
+            parent.breadcrumbs,
+            doc_title=str(parent.element_metadata.get("doc_title") or ""),
+            acronyms=raw_acronyms if isinstance(raw_acronyms, dict) else None,
+        )
+
+    # TABLE_CHILD_MODE: "rows" (legacy), "summary" (embed only the description),
+    # "both" (default). Summary-only makes the table's subject the search target
+    # instead of its digits.
+    mode = (parent.element_metadata.get("table_child_mode") or TABLE_CHILD_MODE).lower()
+    if mode == "summary" and table_summary.strip():
+        children = []
+    if table_summary and table_summary.strip() and mode in ("summary", "both"):
+        summary_text = table_summary.strip()
         children.append(
             ChildChunkData(
                 id=str(uuid.uuid4()),
@@ -550,7 +760,6 @@ _is_markdown_table = is_markdown_table
 def _split_markdown_table_rows(
     parent: ParentChunkData,
     raw_table: str,
-    breadcrumb_tag: str,
     max_chars: int,
 ) -> List[ChildChunkData]:
     """Split a large Markdown table into row-group child chunks.
@@ -566,7 +775,6 @@ def _split_markdown_table_rows(
     Args:
         parent: The table parent chunk.
         raw_table: Raw Markdown table text.
-        breadcrumb_tag: Breadcrumb tag to prepend to each child chunk.
         max_chars: Maximum characters per child chunk.
 
     Returns:
@@ -580,7 +788,7 @@ def _split_markdown_table_rows(
                 id=str(uuid.uuid4()),
                 parent_chunk_id=parent.id,
                 doc_id=parent.doc_id,
-                text=breadcrumb_tag + raw_table,
+                text=raw_table,
                 page=parent.page,
                 breadcrumbs=parent.breadcrumbs,
                 content_type=ContentType.TABLE,
@@ -589,8 +797,8 @@ def _split_markdown_table_rows(
 
     header_line, separator_line, data_lines = parsed  # | Col A | Col B | / | --- | --- | / remaining rows
 
-    # Base overhead: breadcrumb tag + header + separator + two newlines
-    base_overhead = len(breadcrumb_tag) + len(header_line) + len(separator_line) + 2
+    # Base overhead: header + separator + two newlines
+    base_overhead = len(header_line) + len(separator_line) + 2
 
     children: List[ChildChunkData] = []
     current_rows: List[str] = []
@@ -599,9 +807,7 @@ def _split_markdown_table_rows(
     def _flush_group(rows: List[str]) -> None:
         if not rows:
             return
-        group_text = breadcrumb_tag + "\n".join(
-            [header_line, separator_line] + rows
-        )
+        group_text = "\n".join([header_line, separator_line] + rows)
         children.append(
             ChildChunkData(
                 id=str(uuid.uuid4()),
@@ -634,7 +840,7 @@ def _split_markdown_table_rows(
                 id=str(uuid.uuid4()),
                 parent_chunk_id=parent.id,
                 doc_id=parent.doc_id,
-                text=breadcrumb_tag + raw_table,
+                text=raw_table,
                 page=parent.page,
                 breadcrumbs=parent.breadcrumbs,
                 content_type=ContentType.TABLE,
@@ -659,13 +865,12 @@ def _split_figure_children(
     # If the description fits in a single child, don't split — preserve the
     # full VLM description as one retrievable unit.
     if len(parent.text) <= max_chars:
-        breadcrumb_tag = _build_breadcrumb_tag(parent.breadcrumbs)
         return [
             ChildChunkData(
                 id=str(uuid.uuid4()),
                 parent_chunk_id=parent.id,
                 doc_id=parent.doc_id,
-                text=breadcrumb_tag + parent.text,
+                text=parent.text,
                 page=parent.page,
                 breadcrumbs=parent.breadcrumbs,
                 content_type=ContentType.FIGURE,

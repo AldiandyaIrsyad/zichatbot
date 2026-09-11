@@ -18,11 +18,26 @@ class PDFDocument(Base):
     __tablename__ = "pdf_documents"
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     title = Column(String)
+    # Official document number, e.g. "1313/UN40/KM.02.02/2026". Previously this
+    # was mashed into the front of `title` in a filename-safe spelling
+    # ("1313-UN40-KM.02.02-2026 - Peserta Program ..."), which left the
+    # identifier that most factual questions ask for buried in a display string.
+    # Backfilled from scripts/ingestion/backfill_document_metadata.py.
+    # NOTE: there is no Alembic here (app/shared/db.py uses create_all, which
+    # adds tables but never columns), so adding a field to this model does NOT
+    # alter an existing table — the backfill script issues the DDL itself.
+    code = Column(String, nullable=True, index=True)
+    category = Column(String, nullable=True)
+    source_url = Column(String, nullable=True)
     description = Column(Text)
     pdf_path = Column(String)
     active = Column(Boolean, default=True)
     ingestion_status = Column(String, default="pending")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    # Date the document was released/issued (NOT the upload date). Used for
+    # date-priority retrieval strategies. Nullable: the future re-scrape will
+    # supply it; documents ingested before then may lack it.
+    released_date = Column(DateTime(timezone=True), nullable=True)
 
     parent_chunks = relationship(
         "ParentChunk",
@@ -164,4 +179,22 @@ class RetrievedContext(BaseModel):
     child_text: Optional[str] = None
     path: str = ""
     depth: int = 0
+    # Document release date (NOT upload date), populated by the search service
+    # so document-level aggregation doesn't need a redundant get_pdfs_by_ids.
+    released_date: Optional[datetime] = None
+
+
+class RetrievedDocument(BaseModel):
+    """A document-level retrieval result.
+
+    The retrieval API and chat context output are document-based: one object
+    per unique source document, with the document's original title, release
+    date (NOT upload date), and the concatenated retrieved sections.
+    """
+
+    doc_id: str
+    title: str
+    released_date: Optional[datetime] = None
+    content: str
+    score: float = 0.0
     

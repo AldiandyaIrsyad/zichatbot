@@ -1,5 +1,7 @@
 # Python
 .env
+.env.bak*
+.env.*.bak
 .venv/
 **/__pycache__/
 **/*.pyc
@@ -23,6 +25,7 @@ raw_knowledge_base/
 
 # Model checkpoints (large; copied in at deploy time, not committed)
 models/prompt_guard_id/
+models/mmbert_nli_id/
 
 # Ingest / upload resume state
 scripts/upload_state*.json
@@ -37,3 +40,10 @@ evals/**/results/*.jsonl
 
 # Transient Playwright session profile
 scripts/scrapers/.browser_profile/
+
+# Local DB/vector snapshots taken before destructive migrations
+backups/
+
+.venv-mineru/
+post_sidang_exp/
+scripts/

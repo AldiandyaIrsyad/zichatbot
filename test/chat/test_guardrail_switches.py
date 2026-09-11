@@ -37,10 +37,20 @@ class FakeContext:
     chunk_id: str = "chunk-1"
     path: str = "1"
     doc_id: str = "doc-1"
+    child_text: str = ""
+    parent_chunk_id: str = ""
+
+
+@dataclass
+class FakeDocument:
+    content: str = "Isi peraturan terkait."
+    title: str = "Peraturan X"
+    doc_id: str = "doc-1"
+    released_date: Optional[str] = None
 
 
 async def _fake_llm_stream(**kwargs):
-    yield "Statuta UPI mengatur ketentuan ini secara rinci."
+    yield "Statuta UPI mengatur ketentuan ini secara rinci.[CIT:1]"
 
 
 def _make_chat_service() -> tuple[ChatService, dict]:
@@ -53,15 +63,16 @@ def _make_chat_service() -> tuple[ChatService, dict]:
 
     search_service = AsyncMock()
     search_service.search = AsyncMock(return_value=[FakeContext()])
+    search_service.aggregate_documents = AsyncMock(return_value=[FakeDocument()])
 
     ivm_service = AsyncMock()
     relevance_service = AsyncMock()
 
     ram_service = AsyncMock()
-    ram_service.build_premise = MagicMock(return_value="premise")
-    ram_service.assess_sentence = AsyncMock(
+    ram_service.assess_claim = AsyncMock(
         return_value=NLIResult(
             label="entailment", entailment_score=0.9, contradiction_score=0.0,
+            neutral_score=0.0,
             source_title="Peraturan X", page=1, doc_id="doc-1",
         )
     )
@@ -105,7 +116,7 @@ class TestDefaults:
 
         mocks["ivm_service"].check_malicious.assert_awaited_once()
         mocks["relevance_service"].check_relevance.assert_awaited_once()
-        mocks["ram_service"].assess_sentence.assert_awaited()
+        mocks["ram_service"].assess_claim.assert_awaited()
         assert "<user_input_" in _user_turn_sent(mocks)
 
 
@@ -118,7 +129,7 @@ class TestIndividualSwitches:
 
         mocks["ivm_service"].check_malicious.assert_not_awaited()
         mocks["relevance_service"].check_relevance.assert_not_awaited()
-        mocks["ram_service"].assess_sentence.assert_awaited()
+        mocks["ram_service"].assess_claim.assert_awaited()
         assert "<user_input_" in _user_turn_sent(mocks)
 
     @pytest.mark.asyncio
@@ -129,7 +140,7 @@ class TestIndividualSwitches:
 
         mocks["ivm_service"].check_malicious.assert_awaited_once()
         mocks["relevance_service"].check_relevance.assert_awaited_once()
-        mocks["ram_service"].assess_sentence.assert_not_awaited()
+        mocks["ram_service"].assess_claim.assert_not_awaited()
         assert "<user_input_" in _user_turn_sent(mocks)
 
     @pytest.mark.asyncio
@@ -139,7 +150,7 @@ class TestIndividualSwitches:
         await _drain(service.process_chat_message("sess-1", "Apa isi Statuta UPI?", skip_nonce=True))
 
         mocks["ivm_service"].check_malicious.assert_awaited_once()
-        mocks["ram_service"].assess_sentence.assert_awaited()
+        mocks["ram_service"].assess_claim.assert_awaited()
 
         user_turn = _user_turn_sent(mocks)
         assert "<user_input_" not in user_turn
@@ -160,7 +171,7 @@ class TestSkipGuardrailsShorthand:
 
         mocks["ivm_service"].check_malicious.assert_not_awaited()
         mocks["relevance_service"].check_relevance.assert_not_awaited()
-        mocks["ram_service"].assess_sentence.assert_not_awaited()
+        mocks["ram_service"].assess_claim.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_shorthand_does_not_disable_the_nonce(self) -> None:
@@ -188,4 +199,4 @@ class TestSkipGuardrailsShorthand:
         )
 
         mocks["ivm_service"].check_malicious.assert_not_awaited()
-        mocks["ram_service"].assess_sentence.assert_awaited()
+        mocks["ram_service"].assess_claim.assert_awaited()

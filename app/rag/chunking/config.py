@@ -69,6 +69,11 @@ class ChunkingConfig:
     parent_max_chars: int = DEFAULT_PARENT_MAX_CHARS
     child_max_chars: int = DEFAULT_CHILD_MAX_CHARS
     child_overlap_chars: int = DEFAULT_CHILD_OVERLAP_CHARS
+    # How a table parent is represented among its children:
+    #   "rows"    — embed row groups (legacy)
+    #   "summary" — embed only a description; the parent supplies the table
+    #   "both"    — default
+    table_child_mode: str = "both"
 
     # fixed (token-based)
     fixed_parent_max_tokens: int = DEFAULT_FIXED_PARENT_MAX_TOKENS

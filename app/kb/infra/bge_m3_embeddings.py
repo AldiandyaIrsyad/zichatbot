@@ -9,6 +9,7 @@ computes BGE-M3's lexical (sparse) weights alongside the dense vector. Fulfills
 """
 
 import asyncio
+import os
 from functools import lru_cache
 from typing import List
 
@@ -39,6 +40,37 @@ _cuda_oom_retry = retry(
 
 
 @lru_cache(maxsize=1)
+def _resolve_model_source(model_name: str) -> str:
+    """Resolve a Hub repo id to its local snapshot directory when already cached.
+
+    Passing the bare repo id makes the Hub client revalidate the repo on every
+    process start — two API round-trips before any weights load, which is
+    latency on every worker boot and an outright failure when the machine is
+    offline. The weights themselves are already on disk; only the revision
+    lookup goes out. Handing the loader the snapshot path skips it.
+
+    Falls back to ``model_name`` when the model isn't cached yet (first run) or
+    when the path is already local, so the normal download still happens.
+    """
+    if os.path.isdir(model_name):
+        return model_name
+    try:
+        from huggingface_hub import snapshot_download
+
+        path = snapshot_download(model_name, local_files_only=True)
+        logger.debug("bge_m3.resolved_local_snapshot", model=model_name, path=path)
+        return path
+    except Exception as exc:
+        logger.info(
+            "bge_m3.snapshot_not_cached",
+            model=model_name,
+            error=str(exc),
+            action="falling back to Hub download",
+        )
+        return model_name
+
+
+@lru_cache(maxsize=1)
 def _load_model(model_name: str, use_fp16: bool, device: str):
     """Load BGEM3FlagModel once as a process-lifetime singleton. Loading takes
     seconds and several GB, so every instance sharing the same (model_name,
@@ -46,8 +78,9 @@ def _load_model(model_name: str, use_fp16: bool, device: str):
     """
     from FlagEmbedding import BGEM3FlagModel
 
+    source = _resolve_model_source(model_name)
     logger.info("bge_m3.loading", model=model_name, device=device, use_fp16=use_fp16)
-    model = BGEM3FlagModel(model_name, use_fp16=use_fp16, device=device)
+    model = BGEM3FlagModel(source, use_fp16=use_fp16, device=device)
     logger.info("bge_m3.loaded", model=model_name, device=device)
     return model
 
@@ -81,10 +114,15 @@ class BGEM3Embeddings(ITextEmbedder):
             use_fp16=use_fp16,
         )
 
-    async def embed_texts(self, texts: List[str]) -> List[EmbeddingResult]:
+    async def embed_texts(
+        self, texts: List[str], is_query: bool = False
+    ) -> List[EmbeddingResult]:
         """Encode texts via the shared BGE-M3 model, returning dense vectors and
         lexical (sparse) weights for each. Transient CUDA OOM is retried via
         :data:`_cuda_oom_retry` on the inner :meth:`_encode` call.
+
+        ``is_query`` is accepted for interface parity and ignored: BGE-M3 is a
+        symmetric encoder, so queries and documents take the same code path.
         """
         if not texts:
             return []

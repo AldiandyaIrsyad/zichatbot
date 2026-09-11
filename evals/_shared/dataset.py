@@ -12,11 +12,18 @@ Subset C — Boundary relevance:
 Subset D — RAM ground truth:
     question_id, question, full_response, sentence_id, sentence_text,
     retrieved_context, label, verifier_note
+
+IndoNLI — the external Indonesian NLI benchmark (EMNLP 2021):
+    train / val / test / test_lay / test_expert JSONL from
+    ``github.com/ir-nlp-csui/indonli``. Loaded via :func:`load_indonli`.
 """
 
 from __future__ import annotations
 
 import csv
+import json
+import os
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -238,4 +245,87 @@ def load_subset_d(path: str) -> List[SubsetDRow]:
                 edit_note=row.get("edit_note", "").strip(),
             )
         )
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# IndoNLI (external Indonesian NLI benchmark)
+# ---------------------------------------------------------------------------
+
+INDONLI_RAW_BASE = (
+    "https://raw.githubusercontent.com/ir-nlp-csui/indonli/main/data/indonli"
+)
+
+# IndoNLI's single-letter labels → canonical 3-way NLI labels.
+INDONLI_LABEL_MAP = {"e": "entailment", "n": "neutral", "c": "contradiction"}
+
+INDONLI_SPLITS = ("train", "val", "test", "test_lay", "test_expert", "diagnostic")
+
+
+@dataclass(frozen=True)
+class IndoNLIRow:
+    """A single IndoNLI pair.
+
+    ``label`` is canonical (entailment/neutral/contradiction); ``annotator_type``
+    is ``lay`` or ``expert``; ``sentence_size`` is ``single`` or ``multi``.
+    """
+
+    pair_id: int
+    premise: str
+    hypothesis: str
+    label: str
+    annotator_type: str = ""
+    sentence_size: str = ""
+
+
+def _ensure_indonli_file(split: str, data_dir: str) -> Path:
+    """Return the local path for an IndoNLI split, downloading it from GitHub on
+    first use. A missing download raises ``FileNotFoundError``."""
+    target = Path(data_dir) / "indonli" / f"{split}.jsonl"
+    if target.is_file():
+        return target
+
+    url = f"{INDONLI_RAW_BASE}/{split}.jsonl"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(".jsonl.tmp")
+    try:
+        urllib.request.urlretrieve(url, tmp)
+        os.replace(tmp, target)
+    except Exception as exc:  # noqa: BLE001 - surface as a clear load error
+        if tmp.exists():
+            tmp.unlink()
+        raise FileNotFoundError(f"IndoNLI split '{split}' could not be downloaded: {exc}") from exc
+    return target
+
+
+def load_indonli(split: str, data_dir: str = "evals/data") -> List[IndoNLIRow]:
+    """Load an IndoNLI split, mapping single-letter labels to canonical names.
+
+    ``split`` is one of ``train``/``val``/``test``/``test_lay``/``test_expert``.
+    Rows are downloaded from the upstream GitHub repo on first use and cached
+    under ``{data_dir}/indonli/{split}.jsonl``.
+    """
+    if split not in INDONLI_SPLITS:
+        raise ValueError(f"Unknown IndoNLI split: {split} (expected one of {INDONLI_SPLITS})")
+
+    path = _ensure_indonli_file(split, data_dir)
+    rows: List[IndoNLIRow] = []
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            raw_label = str(obj.get("label", "")).strip().lower()
+            label = INDONLI_LABEL_MAP.get(raw_label, raw_label)
+            rows.append(
+                IndoNLIRow(
+                    pair_id=int(obj.get("pair_id", 0)),
+                    premise=str(obj.get("premise", "")).strip(),
+                    hypothesis=str(obj.get("hypothesis", "")).strip(),
+                    label=label,
+                    annotator_type=str(obj.get("annotator_type", "")).strip(),
+                    sentence_size=str(obj.get("sentence_size", "")).strip(),
+                )
+            )
     return rows

@@ -3,6 +3,9 @@ from app.rag.chunking.logic import (
     create_parent_chunks,
     split_into_children,
     infer_heading_depth,
+    derive_table_summary,
+    extract_acronym_definitions,
+    infer_acronyms,
     _build_breadcrumb_tag,
     _slug,
 )
@@ -386,14 +389,13 @@ def test_split_into_children_retains_context():
         breadcrumbs=["Chapter 1", "Section 1.1"]
     )
 
-    # Set max chars small enough to force a split (no prefix budget is
-    # reserved anymore — the tag is added post-split — so this must be
-    # smaller than the body text itself, not the old prefix+body sum).
+    # Set max chars small enough to force a split. Children now embed body
+    # text only — the breadcrumb is appended post-retrieval, not here.
     children = split_into_children(parent, max_chars=40, overlap_chars=5)
 
     assert len(children) > 1
     for child in children:
-        assert child.text.startswith("Chapter 1 > Section 1.1\n\n")
+        assert not child.text.startswith("Chapter 1 > Section 1.1\n\n")
         assert "[Context:" not in child.text
         assert child.breadcrumbs == ["Chapter 1", "Section 1.1"]
 
@@ -672,12 +674,10 @@ def test_min_child_text_length_constant():
 
 
 def test_gibberish_filter_applies_under_active_breadcrumbs():
-    """Regression test: the breadcrumb tag (e.g.
-    "BAB I KETENTUAN UMUM > Pasal 1\\n\\n") prepended to every child chunk
-    could mask a short/garbage body from the MIN_CHILD_TEXT_LENGTH check if
-    the check measured the whole child text — the tag alone is far longer
-    than 8 chars. The filter must measure the body text only, regardless of
-    whether breadcrumbs are present.
+    """Regression test: children carry body text only (no breadcrumb prefix),
+    so the gibberish filter measures the body directly. Breadcrumbs are kept
+    structurally on the child but must not mask a short/garbage body from the
+    MIN_CHILD_TEXT_LENGTH check.
     """
     from app.rag.chunking.logic import MIN_CHILD_TEXT_LENGTH
 
@@ -750,3 +750,125 @@ def test_page_falls_back_to_heading_page_when_chunk_has_no_body_text():
     # The Table flushes the heading-only buffer as its own parent chunk first.
     heading_only = next(p for p in parents if p.content_type == ContentType.TEXT)
     assert heading_only.page == 3
+
+
+# ---------------------------------------------------------------------------
+# Table summary: acronym expansion and cost signal
+#
+# Motivation, measured on bge-reranker-v2-m3 against "berapa biaya UKT": the
+# summary of the tariff table scored 0.345 while a Pasal 1 chunk merely
+# *defining* UKT scored 0.678, so the definition took the context slot and the
+# figures never reached the LLM. The title spells the term out ("Uang Kuliah
+# Tunggal") and never uses the acronym or the word "biaya" that the question
+# uses. With both present the same table scores 0.907 and wins the slot.
+# ---------------------------------------------------------------------------
+
+UKT_TITLE = (
+    "Kelompok Kemampuan Ekonomi Orang Tua/Wali Calon Mahasiswa "
+    "dan Kelompok Tarif Uang Kuliah Tunggal"
+)
+UKT_TABLE = (
+    "| Unit Kerja | Kode | Jenjang | Departemen/Program Studi | Kelompok 1 |\n"
+    "| --- | --- | --- | --- | --- |\n"
+    "| FIP | 1101 | S1 | Bimbingan dan Konseling | Rp. 500.000 |\n"
+    "| FIP | 1102 | S1 | Pendidikan Sejarah | Rp. 3.390.000 |"
+)
+
+
+class TestExtractAcronymDefinitions:
+    def test_extracts_disingkat_definition(self):
+        text = (
+            "3. Uang Kuliah Tunggal yang selanjutnya disingkat UKT adalah biaya "
+            "yang dikenakan kepada setiap mahasiswa."
+        )
+        assert extract_acronym_definitions(text) == {"Uang Kuliah Tunggal": "UKT"}
+
+    def test_extracts_multiple_and_disebut_variant(self):
+        text = (
+            "Iuran Pengembangan Institusi yang selanjutnya disingkat IPI adalah "
+            "biaya lain. Majelis Wali Amanat yang selanjutnya disebut MWA adalah organ."
+        )
+        result = extract_acronym_definitions(text)
+        assert result["Iuran Pengembangan Institusi"] == "IPI"
+        assert result["Majelis Wali Amanat"] == "MWA"
+
+    def test_no_definitions_returns_empty(self):
+        assert extract_acronym_definitions("Pasal 1 Ketentuan Umum.") == {}
+        assert extract_acronym_definitions("") == {}
+
+
+class TestDeriveTableSummaryEnrichment:
+    def test_acronym_appended_to_spelled_out_subject(self):
+        summary = derive_table_summary(
+            UKT_TABLE,
+            doc_title=UKT_TITLE,
+            acronyms={"Uang Kuliah Tunggal": "UKT"},
+        )
+        assert "Uang Kuliah Tunggal (UKT)" in summary
+
+    def test_money_cells_add_cost_wording(self):
+        """'berapa biaya' has to find the word, not just the digits."""
+        summary = derive_table_summary(UKT_TABLE, doc_title=UKT_TITLE)
+        assert "biaya" in summary
+        assert "tarif" in summary.lower()
+
+    def test_table_without_money_gets_no_cost_wording(self):
+        table = (
+            "| No | Nama Fasilitas | Departemen |\n"
+            "| --- | --- | --- |\n"
+            "| 1 | Laboratorium Fisika | Pendidikan Fisika |"
+        )
+        summary = derive_table_summary(table, doc_title="Daftar Fasilitas Penunjang Riset")
+        assert "Rupiah" not in summary
+
+    def test_unrelated_acronyms_are_not_injected(self):
+        summary = derive_table_summary(
+            UKT_TABLE,
+            doc_title=UKT_TITLE,
+            acronyms={"Majelis Wali Amanat": "MWA"},
+        )
+        assert "MWA" not in summary
+
+    def test_acronym_not_duplicated_when_already_present(self):
+        summary = derive_table_summary(
+            UKT_TABLE,
+            doc_title="Tarif UKT dan Uang Kuliah Tunggal",
+            acronyms={"Uang Kuliah Tunggal": "UKT"},
+        )
+        assert summary.count("(UKT)") == 0
+
+    def test_row_labels_still_present(self):
+        """The specific-query path must not regress."""
+        summary = derive_table_summary(
+            UKT_TABLE,
+            doc_title=UKT_TITLE,
+            acronyms={"Uang Kuliah Tunggal": "UKT"},
+        )
+        assert "Pendidikan Sejarah" in summary
+        assert "Kolom:" in summary and "Baris:" in summary
+
+
+class TestInferAcronyms:
+    """The tariff schedule uses "UKT" nine times and never defines it, so
+    definition-mining alone leaves the very table we care about unsearchable
+    by the acronym every question uses."""
+
+    def test_infers_from_title_when_document_never_defines_it(self):
+        body = "Menetapkan kelompok UKT bagi mahasiswa baru. Besaran UKT ditetapkan."
+        assert infer_acronyms(UKT_TITLE, body)["Uang Kuliah Tunggal"] == "UKT"
+
+    def test_rejects_initialisms_absent_from_the_document(self):
+        """"Kelompok Tarif Uang" also initialises, but KTU appears nowhere."""
+        body = "Menetapkan kelompok UKT bagi mahasiswa baru."
+        assert "KTU" not in infer_acronyms(UKT_TITLE, body).values()
+        assert "TUK" not in infer_acronyms(UKT_TITLE, body).values()
+
+    def test_explicit_definition_still_wins(self):
+        body = (
+            "Uang Kuliah Tunggal yang selanjutnya disingkat UKT adalah biaya. "
+            "Besaran UKT ditetapkan."
+        )
+        assert infer_acronyms(UKT_TITLE, body)["Uang Kuliah Tunggal"] == "UKT"
+
+    def test_no_title_and_no_definitions_is_empty(self):
+        assert infer_acronyms("", "teks biasa tanpa singkatan") == {}

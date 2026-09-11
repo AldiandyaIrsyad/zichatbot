@@ -2,6 +2,7 @@
 Asynchronous document ingestion workflow for the KB domain.
 """
 
+import asyncio
 import os
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,7 @@ from app.kb.domain.interfaces import (
 )
 from app.kb.domain.models import ParentChunk, ChildChunk
 from app.rag.chunking.config import ChunkingConfig, ITokenizer
+from app.rag.chunking.logic import infer_acronyms
 from app.rag.chunking.models import ChildChunkData, ContentType, ParsedElement
 from app.rag.chunking.strategy import chunk_children, chunk_parents
 from app.rag.chunking.page_classifier import (
@@ -25,8 +27,10 @@ from app.rag.chunking.page_classifier import (
     VLM_PAGE_EXTRACTION_PROMPT,
     classify_page,
     group_elements_by_page,
+    parsed_effectively,
 )
 from app.rag.chunking.router import classify_element
+from app.rag.vlm.cleanup import clean_vlm_output
 from app.rag.vlm.client import DEFAULT_VLM_PROMPT
 from app.rag.vlm.interfaces import IVLMEnricher
 from app.shared.table_converter import html_table_to_markdown
@@ -67,6 +71,7 @@ class IngestWorker:
         chunking_config: Optional[ChunkingConfig] = None,
         tokenizer: Optional[ITokenizer] = None,
         on_stage: Optional[Callable[[str, dict], None]] = None,
+        vlm_strict: bool = True,
     ):
         """Wire the pipeline's collaborators (all injected ports/adapters).
 
@@ -84,12 +89,19 @@ class IngestWorker:
         self.kb_repo = kb_repo
         self.vlm_enricher = vlm_enricher
         self.image_dir = image_dir
+        # When true (default), a VLM failure fails the document instead of
+        # silently storing un-enriched OCR. See VLMSettings.strict.
+        self.vlm_strict = vlm_strict
         self.page_image_ratio_threshold = page_image_ratio_threshold
         self.page_garbage_ratio_threshold = page_garbage_ratio_threshold
         self.image_description_prompt = image_description_prompt
         self.page_extraction_prompt = page_extraction_prompt
         self.chunking_config = chunking_config or ChunkingConfig()
         self.tokenizer = tokenizer
+        # Cap concurrent VLM ``describe_image`` calls. Pages are processed
+        # concurrently (asyncio.gather); VLM providers rate-limit hard, so the
+        # shared enricher's httpx client is bounded rather than flooded.
+        self._vlm_semaphore = asyncio.Semaphore(4)
         # Optional research/visualization hook invoked at each pipeline stage
         # with the data on hand. Defaults to None so production ingestion is
         # unaffected; set by tools.visualize.production_ingestion_viz to capture
@@ -134,6 +146,35 @@ class IngestWorker:
                 elements, str(pdf_doc.pdf_path), doc_id
             )
             self._emit("routed", {"elements": elements})
+
+            # Stamp the document title onto Table elements so the table-summary
+            # child can name the subject a reader would ("Kelompok Tarif Uang
+            # Kuliah Tunggal") rather than only its column headers. The title is
+            # already loaded above; chunking has no access to the repository.
+            doc_title = (getattr(pdf_doc, "title", "") or "").strip()
+            if doc_title:
+                for element in elements:
+                    if element.element_type == "Table":
+                        element.metadata["doc_title"] = doc_title
+            # Stamp the abbreviations this document defines ("Uang Kuliah
+            # Tunggal yang selanjutnya disingkat UKT") so the table summary can
+            # name its subject the way a question does. The definitions live in
+            # Pasal 1, i.e. in a different element from the table, so they have
+            # to be gathered document-wide before chunking splits them apart.
+            acronyms = infer_acronyms(
+                doc_title, "\n".join(el.text for el in elements if el.text)
+            )
+            if acronyms:
+                for element in elements:
+                    if element.element_type == "Table":
+                        element.metadata["acronyms"] = acronyms
+
+            # Carry the configured table mode on the element too: the chunking
+            # layer reads os.getenv, which never sees .env (pydantic-settings
+            # parses that file without exporting), so config must travel here.
+            for element in elements:
+                if element.element_type == "Table":
+                    element.metadata["table_child_mode"] = self.chunking_config.table_child_mode
 
             # 3. Pure Chunking Algorithm (Thesis) — hierarchical or fixed
             parent_chunk_data = chunk_parents(
@@ -302,6 +343,7 @@ class IngestWorker:
         os.makedirs(self.image_dir, exist_ok=True)
 
         page_groups = group_elements_by_page(elements)
+        page_items = list(page_groups.items())
 
         result_elements: list[ParsedElement] = []
         enriched_count = 0
@@ -311,7 +353,10 @@ class IngestWorker:
         visual_pages_enriched = 0
         visual_pages_failed = 0
 
-        for page_key, page_elements in page_groups.items():
+        # 1. Classify pages sequentially (CPU-light) so emit order and logs stay
+        #    deterministic; VISUAL pages are counted here.
+        classifications = {}
+        for page_key, page_elements in page_items:
             classification = None
             if page_key is not None:
                 classification = classify_page(
@@ -332,18 +377,51 @@ class IngestWorker:
                     element_count=classification.element_count,
                 )
                 self._emit("page_classified", {"classification": classification})
-
+            classifications[page_key] = classification
             if classification is not None and classification.page_type == PageType.VISUAL:
                 visual_pages_count += 1
 
+        # 2. Process pages concurrently. VLM describe_image calls dominate, so
+        #    gathering overlaps the network round-trips across pages; the
+        #    per-VLM semaphore bounds provider load. Returns
+        #    (elements, enriched_delta, tables_delta, visual_enriched, visual_failed).
+        visual_pages_parser_kept = 0
+
+        async def _process_page(page_key, page_elements, classification):
+            nonlocal visual_pages_parser_kept
+            if (
+                classification is not None
+                and classification.page_type == PageType.VISUAL
+                and parsed_effectively(page_elements)
+            ):
+                # The page looks visual, but the parser read it anyway — MinerU
+                # OCRs scanned tables that Unstructured could only garble, and
+                # this classification predates that. Replacing a real table with
+                # a VLM transcription of the same page loses cells (measured:
+                # half of those transcriptions ended mid-row), so the parser's
+                # output wins and only genuine images go to the VLM, via the
+                # per-element figure path below.
+                visual_pages_parser_kept += 1
+                logger.info(
+                    "kb.ingest.visual_page_parser_kept",
+                    doc_id=doc_id,
+                    page=page_key,
+                    elements=len(page_elements),
+                    tables=sum(1 for el in page_elements if el.element_type == "Table"),
+                )
+                processed, enriched_delta, tables_delta = await self._route_default_page_elements(
+                    page_elements, pdf_path, doc_id,
+                )
+                return processed, enriched_delta, tables_delta, 0, 0
+
+            if classification is not None and classification.page_type == PageType.VISUAL:
                 # Preserve genuine section-boundary Titles so downstream
                 # heading breadcrumbs (create_parent_chunks) aren't broken.
                 titles = [
                     el for el in page_elements
                     if el.element_type == "Title" and len(el.text.strip()) > 3
                 ]
-                result_elements.extend(titles)
-
+                out: list[ParsedElement] = list(titles)
                 figure_el = await self._process_visual_page(page_key, pdf_path, doc_id)
                 if figure_el is not None:
                     figure_el.metadata.update({
@@ -351,24 +429,50 @@ class IngestWorker:
                         "source_image_ratio": round(classification.image_ratio, 3),
                         "source_garbage_ratio": round(classification.garbage_ratio, 3),
                     })
-                    result_elements.append(figure_el)
-                    enriched_count += 1
-                    visual_pages_enriched += 1
-                else:
-                    visual_pages_failed += 1
-                    logger.warning(
-                        "kb.ingest.visual_page_dropped",
-                        doc_id=doc_id,
-                        page=page_key,
-                    )
-                continue
-
+                    out.append(figure_el)
+                    return out, 1, 0, 1, 0
+                logger.warning(
+                    "kb.ingest.visual_page_dropped",
+                    doc_id=doc_id,
+                    page=page_key,
+                )
+                return out, 0, 0, 0, 1
             processed, enriched_delta, tables_delta = await self._route_default_page_elements(
                 page_elements, pdf_path, doc_id,
             )
-            result_elements.extend(processed)
+            return processed, enriched_delta, tables_delta, 0, 0
+
+        page_results = await asyncio.gather(
+            *(
+                _process_page(page_key, page_elements, classifications[page_key])
+                for page_key, page_elements in page_items
+            ),
+            return_exceptions=True,
+        )
+
+        # 3. Reassemble in original page order.
+        for (page_key, _page_elements), res in zip(page_items, page_results):
+            if isinstance(res, Exception):
+                logger.error(
+                    "kb.ingest.page_failed",
+                    doc_id=doc_id,
+                    page=page_key,
+                    error=str(res),
+                )
+                # gather(return_exceptions=True) turns a raised VLM failure back
+                # into a value, which silently undid the strict check inside
+                # _process_page: the first full reingest completed 21 documents
+                # that were each missing pages to 413 errors. Re-raise here so
+                # strict mode actually fails the document.
+                if self.vlm_strict:
+                    raise res
+                continue
+            elems, enriched_delta, tables_delta, visual_enriched, visual_failed = res
+            result_elements.extend(elems)
             enriched_count += enriched_delta
             tables_converted += tables_delta
+            visual_pages_enriched += visual_enriched
+            visual_pages_failed += visual_failed
 
         # Final filter: remove any elements with empty text (can't embed them)
         # This catches figures where VLM failed and any other empty artifacts.
@@ -387,6 +491,7 @@ class IngestWorker:
             visual_pages_count=visual_pages_count,
             visual_pages_enriched=visual_pages_enriched,
             visual_pages_failed=visual_pages_failed,
+            visual_pages_parser_kept=visual_pages_parser_kept,
         )
         return final_elements
 
@@ -451,11 +556,12 @@ class IngestWorker:
                     continue
 
                 try:
-                    description = await self.vlm_enricher.describe_image(
-                        image_path, prompt=self.image_description_prompt
-                    )
+                    async with self._vlm_semaphore:
+                        description = await self.vlm_enricher.describe_image(
+                            image_path, prompt=self.image_description_prompt
+                        )
                     if description and description.strip():
-                        el.text = description.strip()
+                        el.text = clean_vlm_output(description).strip()
                         enriched_count += 1
                         result_elements.append(el)
                         logger.info(
@@ -477,6 +583,12 @@ class IngestWorker:
                         page=page_number,
                         error=str(exc),
                     )
+                    # Ingestion is write-once: whatever lands here is what every
+                    # later stage reads. Swallowing a VLM failure stores raw OCR
+                    # that looks fine until a table turns out to be unusable
+                    # months later. Fail the document so it can be retried.
+                    if self.vlm_strict:
+                        raise
                 continue
 
             # --- TABLE routing: HTML → Markdown conversion ---
@@ -541,9 +653,10 @@ class IngestWorker:
             return None
 
         try:
-            description = await self.vlm_enricher.describe_image(
-                image_path, prompt=self.page_extraction_prompt
-            )
+            async with self._vlm_semaphore:
+                description = await self.vlm_enricher.describe_image(
+                    image_path, prompt=self.page_extraction_prompt
+                )
         except Exception as exc:
             logger.error(
                 "kb.ingest.visual_page_vlm_failed",
@@ -551,6 +664,12 @@ class IngestWorker:
                 page=page_number,
                 error=str(exc),
             )
+            # A VISUAL page is one the classifier decided has no usable native
+            # text, so returning None here means the page contributes nothing
+            # (or garbage) to the index. That is precisely the failure that
+            # produced the mangled UKT tariff table.
+            if self.vlm_strict:
+                raise
             return None
 
         if not description or not description.strip():
@@ -560,6 +679,12 @@ class IngestWorker:
                 page=page_number,
             )
             return None
+
+        # The VLM narrates the page as an image before transcribing it, and
+        # decorates its headings with emoji. The framing is near-identical
+        # across every scanned decree, so it retrieves for almost any question
+        # about an institutional document.
+        description = clean_vlm_output(description)
 
         logger.info(
             "kb.ingest.visual_page_extracted",

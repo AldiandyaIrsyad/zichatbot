@@ -125,6 +125,7 @@ class HyDEExpander(IQueryExpander):
                 messages=messages,
                 max_tokens=self._max_tokens,
                 temperature=self._temperature,
+                call="hyde",
             )
             logger.debug(
                 "chat.hyde.expand_done",
@@ -156,6 +157,7 @@ class HyDEExpander(IQueryExpander):
                 messages=messages,
                 max_tokens=self._max_tokens,
                 temperature=self._temperature,
+                call="hyde",
             )
 
         generated = await asyncio.gather(

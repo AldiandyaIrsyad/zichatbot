@@ -8,7 +8,7 @@ import structlog
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from sqlalchemy import text
+from sqlalchemy import delete, func, or_, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import joinedload
@@ -17,6 +17,12 @@ from app.kb.domain.interfaces import IKBRepository
 from app.kb.domain.models import PDFDocument, ParentChunk, IngestionTask, ChildChunk
 
 logger = structlog.get_logger(__name__)
+
+
+def _escape_ilike(value: str) -> str:
+    """Escape ILIKE wildcards (``%``, ``_``, and the escape char ``\\``) so a
+    user-supplied search term is matched literally rather than as a pattern."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 class PostgresKBRepository(IKBRepository):
@@ -30,20 +36,79 @@ class PostgresKBRepository(IKBRepository):
         result = await self.db.execute(select(PDFDocument).order_by(PDFDocument.created_at.desc()))
         return list(result.scalars().all())
 
+    async def query_pdfs(
+        self,
+        search: Optional[str] = None,
+        active: Optional[bool] = None,
+        released_from: Optional[datetime] = None,
+        released_to: Optional[datetime] = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[List[PDFDocument], int]:
+        """Paginated, filtered document listing.
+
+        ``search`` matches title/description (case-insensitive substring);
+        ``active`` filters the retrieval flag; ``released_from``/``released_to``
+        bound the release date inclusively. Returns (page_items, total_count).
+        """
+        conditions = []
+        if search:
+            pattern = f"%{_escape_ilike(search)}%"
+            conditions.append(
+                or_(
+                    PDFDocument.title.ilike(pattern, escape="\\"),
+                    PDFDocument.description.ilike(pattern, escape="\\"),
+                )
+            )
+        if active is not None:
+            conditions.append(PDFDocument.active.is_(active))
+        if released_from is not None:
+            conditions.append(PDFDocument.released_date >= released_from)
+        if released_to is not None:
+            conditions.append(PDFDocument.released_date < released_to)
+
+        count_stmt = select(func.count()).select_from(PDFDocument)
+        items_stmt = select(PDFDocument)
+        if conditions:
+            count_stmt = count_stmt.where(*conditions)
+            items_stmt = items_stmt.where(*conditions)
+
+        total = (await self.db.execute(count_stmt)).scalar() or 0
+        result = await self.db.execute(
+            items_stmt.order_by(PDFDocument.created_at.desc()).offset(offset).limit(limit)
+        )
+        return list(result.scalars().all()), int(total)
+
     async def get_pdf_by_id(self, pdf_id: str) -> Optional[PDFDocument]:
         """Fetch a single document by primary key, or None if not found."""
         query = select(PDFDocument).where(PDFDocument.id == pdf_id)
         result = await self.db.execute(query)
         return result.scalars().first()
 
-    async def create_pdf(self, title: str, description: str, pdf_path: str) -> PDFDocument:
+    async def create_pdf(
+        self,
+        title: str,
+        description: str,
+        pdf_path: str,
+        released_date: Optional[datetime] = None,
+    ) -> PDFDocument:
         """Insert a new PDFDocument row and flush/refresh it so callers get
         back a fully-populated instance (e.g. server-generated ``id``)."""
-        new_pdf = PDFDocument(title=title, description=description, pdf_path=pdf_path)
+        new_pdf = PDFDocument(
+            title=title,
+            description=description,
+            pdf_path=pdf_path,
+            released_date=released_date,
+        )
         self.db.add(new_pdf)
         await self.db.flush()
         await self.db.refresh(new_pdf)
-        logger.info("kb.repository.pdf_created", pdf_id=new_pdf.id, title=title)
+        logger.info(
+            "kb.repository.pdf_created",
+            pdf_id=new_pdf.id,
+            title=title,
+            released_date=released_date.isoformat() if released_date else None,
+        )
         return new_pdf
 
     async def update_pdf_active_status(self, pdf_id: str, active: bool) -> Optional[PDFDocument]:
@@ -63,6 +128,27 @@ class PostgresKBRepository(IKBRepository):
             return pdf
         return None
 
+    async def bulk_update_active_status(self, pdf_ids: List[str], active: bool) -> List[str]:
+        """Toggle ``active`` on many documents in a single UPDATE; returns the
+        ids that actually existed (mirroring into Qdrant is the caller's job,
+        see ``KBApplicationService.bulk_update_status``)."""
+        if not pdf_ids:
+            return []
+        result = await self.db.execute(
+            select(PDFDocument.id).where(PDFDocument.id.in_(pdf_ids))
+        )
+        existing_ids = [row[0] for row in result.all()]
+        if not existing_ids:
+            return []
+        await self.db.execute(
+            update(PDFDocument)
+            .where(PDFDocument.id.in_(existing_ids))
+            .values(active=active)
+        )
+        await self.db.flush()
+        logger.info("kb.repository.pdf_status_bulk_updated", count=len(existing_ids), active=active)
+        return existing_ids
+
     async def delete_pdf(self, pdf_id: str) -> bool:
         """Delete a document row; its chunks cascade via FK on-delete rules.
         Returns True if a row was found and deleted, False otherwise.
@@ -76,6 +162,26 @@ class PostgresKBRepository(IKBRepository):
             return True
         return False
 
+    async def bulk_delete_pdfs(self, pdf_ids: List[str]) -> List[str]:
+        """Delete many documents in a single DELETE; returns the ids that
+        actually existed. Chunk rows cascade via their ``ondelete="CASCADE"``
+        foreign keys (parent_chunks/child_chunks/ingestion_tasks). Qdrant
+        vectors and on-disk files are the caller's responsibility."""
+        if not pdf_ids:
+            return []
+        result = await self.db.execute(
+            select(PDFDocument.id).where(PDFDocument.id.in_(pdf_ids))
+        )
+        existing_ids = [row[0] for row in result.all()]
+        if not existing_ids:
+            return []
+        await self.db.execute(
+            delete(PDFDocument).where(PDFDocument.id.in_(existing_ids))
+        )
+        await self.db.flush()
+        logger.info("kb.repository.pdf_bulk_deleted", count=len(existing_ids))
+        return existing_ids
+
     async def search_titles_naive(self, query: str) -> List[PDFDocument]:
         """Literal, case-insensitive, word-order-sensitive title substring
         match — deliberately reproduces the title-only search behavior of
@@ -85,7 +191,7 @@ class PostgresKBRepository(IKBRepository):
         result = await self.db.execute(
             select(PDFDocument)
             .where(PDFDocument.active.is_(True))
-            .where(PDFDocument.title.ilike(f"%{query}%"))
+            .where(PDFDocument.title.ilike(f"%{_escape_ilike(query)}%", escape="\\"))
             .order_by(PDFDocument.created_at.desc())
         )
         return list(result.scalars().all())

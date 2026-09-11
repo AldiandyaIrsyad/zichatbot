@@ -12,9 +12,11 @@ Tests cover:
 """
 
 import pytest
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 from app.kb.application.search_service import SearchService
+from app.kb.application.retrieval_strategies import DatePriorityStrategy
 from app.kb.domain.interfaces import (
     EmbeddingResult,
     SearchResult,
@@ -25,6 +27,7 @@ from app.kb.domain.models import (
     ParentChunk,
     PDFDocument,
     RetrievedContext,
+    RetrievedDocument,
 )
 
 
@@ -107,7 +110,11 @@ def _make_child(
     return cc
 
 
-def _make_pdf(doc_id: str = "doc1", title: str = "Test Doc") -> MagicMock:
+def _make_pdf(
+    doc_id: str = "doc1",
+    title: str = "Test Doc",
+    released_date: datetime | None = None,
+) -> MagicMock:
     """Create a mock PDFDocument with the given attributes."""
     pdf = MagicMock(spec=PDFDocument)
     pdf.id = doc_id
@@ -115,6 +122,7 @@ def _make_pdf(doc_id: str = "doc1", title: str = "Test Doc") -> MagicMock:
     pdf.description = ""
     pdf.pdf_path = "/fake/path.pdf"
     pdf.is_active = True
+    pdf.released_date = released_date
     return pdf
 
 
@@ -454,7 +462,14 @@ class TestSearchPipeline:
         ]
         children = [_make_child(cid="c1", parent_id="p1", text="Child 1")]
         parent1 = _make_parent(pid="p1", text="Parent 1", parent_id="root", path="root.p1")
-        parent2 = _make_parent(pid="p2", text="Sibling text", parent_id="root", path="root.p2")
+        parent2 = _make_parent(
+            pid="p2",
+            # Long enough to clear MIN_HYDRATED_CHARS — a heading-only chunk
+            # carries no evidence and is filtered out of hydration.
+            text="Sibling text. " + "Ketentuan lanjutan pada bagian ini. " * 8,
+            parent_id="root",
+            path="root.p2",
+        )
         parents = [parent1]
         siblings = [parent2]
         pdfs = [_make_pdf()]
@@ -474,7 +489,7 @@ class TestSearchPipeline:
         # Should include both primary and sibling
         texts = [r.text for r in result]
         assert "Parent 1" in texts
-        assert "Sibling text" in texts
+        assert any(t.startswith("Sibling text") for t in texts)
 
     @pytest.mark.asyncio
     async def test_cross_ref_detection(self) -> None:
@@ -490,7 +505,10 @@ class TestSearchPipeline:
         parents = [parent1]
         # Cross-ref result
         cross_ref_parent = _make_parent(
-            pid="p5", text="Pasal 5 content", path="pasal_5",
+            pid="p5",
+            # Long enough to clear MIN_HYDRATED_CHARS (see sibling test).
+            text="Pasal 5 content. " + "Isi ketentuan Pasal 5 selengkapnya. " * 8,
+            path="pasal_5",
         )
         pdfs = [_make_pdf()]
 
@@ -508,7 +526,7 @@ class TestSearchPipeline:
         result = await svc.search("query", top_k=10)
         texts = [r.text for r in result]
         assert "Parent 1 text" in texts
-        assert "Pasal 5 content" in texts
+        assert any(t.startswith("Pasal 5 content") for t in texts)
 
     @pytest.mark.asyncio
     async def test_reranker_failure_truncates_gracefully(self) -> None:
@@ -640,7 +658,7 @@ class TestHyDEIntegration:
         await svc.search("raw query", top_k=5)
 
         # Should fall back to raw query
-        emb.embed_texts.assert_called_once_with(["raw query"])
+        emb.embed_texts.assert_called_once_with(["raw query"], is_query=True)
 
     @pytest.mark.asyncio
     async def test_hyde_failure_falls_back_to_raw_query(self) -> None:
@@ -670,4 +688,232 @@ class TestHyDEIntegration:
 
         await svc.search("raw query", top_k=5)
 
-        emb.embed_texts.assert_called_once_with(["raw query"])
+        emb.embed_texts.assert_called_once_with(["raw query"], is_query=True)
+
+
+class TestAggregateDocuments:
+    @pytest.mark.asyncio
+    async def test_groups_by_document_and_dedupes_parents(self) -> None:
+        d1 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        pdfs = [
+            _make_pdf(doc_id="doc1", title="Doc One", released_date=d1),
+            _make_pdf(doc_id="doc2", title="Doc Two", released_date=None),
+        ]
+        contexts = [
+            RetrievedContext(chunk_id="c1", parent_chunk_id="p1", doc_id="doc1", text="A", score=0.9),
+            # Same parent surfaced twice (sibling/cross-ref) — must be deduped.
+            RetrievedContext(chunk_id="c2", parent_chunk_id="p1", doc_id="doc1", text="A", score=0.7),
+            RetrievedContext(chunk_id="c3", parent_chunk_id="p2", doc_id="doc1", text="B", score=0.5),
+            RetrievedContext(chunk_id="c4", parent_chunk_id="p3", doc_id="doc2", text="C", score=0.8),
+        ]
+        svc = SearchService(
+            text_embedder=_make_embedder(),
+            vector_store=_make_vector_store([]),
+            kb_repo=_make_kb_repo(pdf_docs=pdfs),
+        )
+
+        docs = await svc.aggregate_documents(contexts)
+
+        assert [d.doc_id for d in docs] == ["doc1", "doc2"]
+        assert docs[0].title == "Doc One"
+        assert docs[0].released_date == d1
+        assert docs[0].content == "A\n\nB"  # duplicate parent removed
+        assert docs[0].score == 0.9
+        assert docs[1].released_date is None
+
+
+class TestDatePriorityStrategy:
+    def test_newer_documents_rank_first(self) -> None:
+        older = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        newer = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        docs = [
+            RetrievedDocument(doc_id="old", title="Old", released_date=older, content="x", score=1.0),
+            RetrievedDocument(doc_id="new", title="New", released_date=newer, content="x", score=1.0),
+        ]
+
+        ranked = DatePriorityStrategy(lam=0.5).rank_documents(docs)
+
+        assert [d.doc_id for d in ranked] == ["new", "old"]
+
+    def test_missing_date_is_not_penalized(self) -> None:
+        ref = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        old = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        docs = [
+            RetrievedDocument(doc_id="new", title="New", released_date=ref, content="x", score=1.0),
+            RetrievedDocument(doc_id="old", title="Old", released_date=old, content="x", score=1.0),
+            RetrievedDocument(doc_id="undated", title="Undated", released_date=None, content="x", score=1.0),
+        ]
+
+        ranked = DatePriorityStrategy(lam=0.5).rank_documents(docs)
+
+        assert [d.doc_id for d in ranked] == ["new", "undated", "old"]
+
+
+class TestQueryExpansionOptOut:
+    """HyDE costs one LLM round-trip per passage and is the dominant cost of a
+    chat request, so callers that only need a coarse signal can opt out."""
+
+    @staticmethod
+    def _expander() -> AsyncMock:
+        expander = AsyncMock()
+        expander.expand_many = AsyncMock(return_value=["hypothetical passage"])
+        return expander
+
+    @pytest.mark.asyncio
+    async def test_expansion_runs_by_default(self) -> None:
+        expander = self._expander()
+        svc = SearchService(
+            text_embedder=_make_embedder(),
+            vector_store=_make_vector_store([]),
+            kb_repo=_make_kb_repo(),
+            query_expander=expander,
+        )
+        await svc.search("query")
+        expander.expand_many.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_use_expansion_false_spends_no_llm_call(self) -> None:
+        expander = self._expander()
+        svc = SearchService(
+            text_embedder=_make_embedder(),
+            vector_store=_make_vector_store([]),
+            kb_repo=_make_kb_repo(),
+            query_expander=expander,
+        )
+        await svc.search("query", use_expansion=False)
+        expander.expand_many.assert_not_awaited()
+
+
+class TestHydrationBudget:
+    """Siblings and cross-refs carry score 0.0 — they were never scored against
+    the query. Uncapped they crowded out the reranked results and made the
+    result set nondeterministic."""
+
+    @pytest.mark.asyncio
+    async def test_cross_refs_are_capped(self) -> None:
+        from app.kb.application.search_service import MAX_CROSS_REF_CONTEXTS
+
+        primary = [
+            RetrievedContext(
+                chunk_id="c1", parent_chunk_id="p1", doc_id="d1",
+                text="Sesuai Pasal 1, Pasal 2, Pasal 3, Pasal 4, Pasal 5, Pasal 6 dan BAB II.",
+                score=0.9, source_title="Doc",
+            )
+        ]
+        repo = _make_kb_repo()
+        repo.get_chunks_by_path_prefix = AsyncMock(
+            return_value=[_make_parent(pid=f"x{i}", text=f"Isi {i}") for i in range(20)]
+        )
+        svc = SearchService(
+            text_embedder=_make_embedder(),
+            vector_store=_make_vector_store([]),
+            kb_repo=repo,
+        )
+        refs = await svc._detect_and_fetch_cross_refs(primary, {}, {"d1": "Doc"})
+        assert len(refs) <= MAX_CROSS_REF_CONTEXTS
+
+    @pytest.mark.asyncio
+    async def test_cross_ref_prefix_order_is_deterministic(self) -> None:
+        # A set would iterate in hash order, so which refs survived varied
+        # between processes for the very same query.
+        svc = SearchService(
+            text_embedder=_make_embedder(),
+            vector_store=_make_vector_store([]),
+            kb_repo=_make_kb_repo(),
+        )
+        text = "Mengacu pada Pasal 9, kemudian Pasal 3, lalu Pasal 7."
+        assert svc._extract_cross_references(text) == ["pasal_9", "pasal_3", "pasal_7"]
+
+    @pytest.mark.asyncio
+    async def test_hydrate_false_skips_the_db_fan_out(self) -> None:
+        repo = _make_kb_repo()
+        repo.get_sibling_chunks = AsyncMock(return_value=[])
+        repo.get_chunks_by_path_prefix = AsyncMock(return_value=[])
+        svc = SearchService(
+            text_embedder=_make_embedder(),
+            vector_store=_make_vector_store([]),
+            kb_repo=repo,
+        )
+        await svc.search("query", hydrate=False)
+        repo.get_sibling_chunks.assert_not_awaited()
+        repo.get_chunks_by_path_prefix.assert_not_awaited()
+
+
+class TestRerankProbe:
+    """What the cross-encoder scores against. Against the raw question a chunk
+    that merely echoes its wording can outrank the one that answers it; the
+    generated passage is written in the register of the passage that matches."""
+
+    @staticmethod
+    def _svc(probe: str, reranker, expander=None):
+        return SearchService(
+            text_embedder=_make_embedder(),
+            vector_store=_make_vector_store([]),
+            kb_repo=_make_kb_repo(),
+            reranker=reranker,
+            query_expander=expander,
+            rerank_probe=probe,
+        )
+
+    @staticmethod
+    def _expander() -> AsyncMock:
+        expander = AsyncMock()
+        expander.expand_many = AsyncMock(return_value=["hypothetical answer passage"])
+        return expander
+
+    @pytest.mark.asyncio
+    async def test_hyde_passage_is_the_probe_when_expansion_ran(self) -> None:
+        search_results = [SearchResult(chunk_id="c1", parent_chunk_id="p1", doc_id="d1", score=0.9)]
+        reranker = AsyncMock()
+        reranker.rerank = AsyncMock(return_value=[RerankResult(index=0, score=0.9)])
+        svc = SearchService(
+            text_embedder=_make_embedder(),
+            vector_store=_make_vector_store(search_results),
+            kb_repo=_make_kb_repo(
+                child_chunks=[_make_child(cid="c1", parent_id="p1", text="Isi")],
+                parent_chunks=[_make_parent(pid="p1", text="Isi parent")],
+            ),
+            reranker=reranker,
+            query_expander=self._expander(),
+            rerank_probe="hyde",
+        )
+        await svc.search("berapa UKT 2026")
+        assert reranker.rerank.await_args.kwargs["query"] == "hypothetical answer passage"
+
+    @pytest.mark.asyncio
+    async def test_raw_query_is_the_probe_when_configured(self) -> None:
+        search_results = [SearchResult(chunk_id="c1", parent_chunk_id="p1", doc_id="d1", score=0.9)]
+        reranker = AsyncMock()
+        reranker.rerank = AsyncMock(return_value=[RerankResult(index=0, score=0.9)])
+        svc = SearchService(
+            text_embedder=_make_embedder(),
+            vector_store=_make_vector_store(search_results),
+            kb_repo=_make_kb_repo(
+                child_chunks=[_make_child(cid="c1", parent_id="p1", text="Isi")],
+                parent_chunks=[_make_parent(pid="p1", text="Isi parent")],
+            ),
+            reranker=reranker,
+            query_expander=self._expander(),
+            rerank_probe="query",
+        )
+        await svc.search("berapa UKT 2026")
+        assert reranker.rerank.await_args.kwargs["query"] == "berapa UKT 2026"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_raw_query_without_expansion(self) -> None:
+        search_results = [SearchResult(chunk_id="c1", parent_chunk_id="p1", doc_id="d1", score=0.9)]
+        reranker = AsyncMock()
+        reranker.rerank = AsyncMock(return_value=[RerankResult(index=0, score=0.9)])
+        svc = SearchService(
+            text_embedder=_make_embedder(),
+            vector_store=_make_vector_store(search_results),
+            kb_repo=_make_kb_repo(
+                child_chunks=[_make_child(cid="c1", parent_id="p1", text="Isi")],
+                parent_chunks=[_make_parent(pid="p1", text="Isi parent")],
+            ),
+            reranker=reranker,
+            query_expander=None,
+            rerank_probe="hyde",
+        )
+        await svc.search("berapa UKT 2026")
+        assert reranker.rerank.await_args.kwargs["query"] == "berapa UKT 2026"

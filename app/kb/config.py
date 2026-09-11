@@ -17,6 +17,7 @@ from app.rag.chunking.logic import (
 )
 from app.rag.chunking.page_classifier import VLM_PAGE_EXTRACTION_PROMPT
 from app.rag.vlm.client import DEFAULT_VLM_PROMPT
+from app.kb.application.retrieval_strategies import DEFAULT_DATE_PRIORITY_LAMBDA
 
 class QdrantSettings(BaseSettings):
     """Connection settings for the Qdrant vector store (``QdrantStore``)."""
@@ -49,6 +50,52 @@ class UnstructuredSettings(BaseSettings):
 
 @lru_cache
 def get_unstructured_settings() -> UnstructuredSettings: return UnstructuredSettings()
+
+class MinerUSettings(BaseSettings):
+    """Hosted MinerU parser settings, and the switch between parsers.
+
+    ``PARSER_BACKEND`` selects the ``IDocumentParser`` implementation:
+      unstructured — Unstructured (default). Returns table HTML but garbles cell
+                     content on this corpus ("Kelompok 1}", dropped "Rp.",
+                     [merged] cells).
+      mineru       — hosted MinerU. Recovered 96 programme codes and 714 tariff
+                     values on the UKT schedule where Unstructured recovered
+                     none. Its per-file caps (200 pages / 200 MB — the API
+                     rejects over 200 despite docs advertising 600) are handled
+                     by splitting into page windows, so any page count parses;
+                     see ``pages_per_request``.
+      mineru_local — the same parser run locally from its own virtualenv. No
+                     upload, no rate limit, no page cap. Preferred when the
+                     hosted API is stalling uploads; needs the GPU free (stop
+                     the TEI reranker for the duration of a parse).
+    """
+
+    backend: Literal["unstructured", "mineru", "mineru_local"] = Field(
+        default="unstructured", validation_alias="PARSER_BACKEND"
+    )
+    local_binary: str = Field(
+        default=".venv-mineru/bin/mineru", validation_alias="MINERU_LOCAL_BINARY"
+    )
+    local_device: str = Field(default="cuda", validation_alias="MINERU_LOCAL_DEVICE")
+    local_backend: str = Field(default="pipeline", validation_alias="MINERU_LOCAL_BACKEND")
+    local_method: str = Field(default="ocr", validation_alias="MINERU_LOCAL_METHOD")
+    api_key: str = Field(default="", validation_alias="MINERU_API_KEY")
+    base_url: str = Field(default="https://mineru.net", validation_alias="MINERU_BASE_URL")
+    batch_path: str = Field(default="/api/v4/file-urls/batch", validation_alias="MINERU_BATCH")
+    language: str = Field(default="id", validation_alias="MINERU_LANGUAGE")
+    poll_interval_sec: float = Field(default=10.0, validation_alias="MINERU_POLL_INTERVAL_SEC")
+    max_wait_sec: float = Field(default=1800.0, validation_alias="MINERU_MAX_WAIT_SEC")
+    # Pages per hosted request. The API rejects a file over 200 pages; anything
+    # above this value is sliced into windows and re-joined with original page
+    # numbers.
+    pages_per_request: int = Field(
+        default=180, validation_alias="MINERU_PAGES_PER_REQUEST"
+    )
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+@lru_cache
+def get_mineru_settings() -> MinerUSettings: return MinerUSettings()
+
 
 class KBStorageSettings(BaseSettings):
     """Filesystem locations for uploaded PDFs and extracted page images."""
@@ -92,6 +139,14 @@ class ChunkingSettings(BaseSettings):
         default=DEFAULT_CHILD_OVERLAP_CHARS,
         description="hierarchical: character overlap between adjacent child chunks.",
     )
+    table_child_mode: Literal["rows", "summary", "both"] = Field(
+        default="both",
+        description=(
+            "What gets embedded for a table: 'rows' (row groups, legacy), "
+            "'summary' (a description only — the full table still reaches the "
+            "LLM because retrieval hydrates the parent), or 'both'."
+        ),
+    )
 
     fixed_parent_max_tokens: int = Field(
         default=DEFAULT_FIXED_PARENT_MAX_TOKENS,
@@ -115,6 +170,7 @@ class ChunkingSettings(BaseSettings):
             parent_max_chars=self.parent_max_chars,
             child_max_chars=self.child_max_chars,
             child_overlap_chars=self.child_overlap_chars,
+            table_child_mode=self.table_child_mode,
             fixed_parent_max_tokens=self.fixed_parent_max_tokens,
             fixed_child_max_tokens=self.fixed_child_max_tokens,
             fixed_child_overlap_tokens=self.fixed_child_overlap_tokens,
@@ -137,6 +193,41 @@ class KBInfinitySettings(BaseSettings):
 
 @lru_cache
 def get_infinity_settings() -> KBInfinitySettings: return KBInfinitySettings()
+
+
+class RerankerSettings(BaseSettings):
+    """Which server backs the ``IReranker`` port.
+
+    ``tei`` (default) is HuggingFace Text Embeddings Inference — continuous
+    batching, actively maintained, no transformers pin. ``infinity`` is the
+    legacy backend, kept so the two can be A/B'd with
+    ``evals/exp2_retrieval/run.py`` before Infinity is removed.
+
+    Both serve the same model, so switching backends is expected to be
+    behaviour-neutral; the eval is how that gets verified rather than assumed.
+    """
+
+    backend: Literal["tei", "qwen3", "infinity"] = Field(
+        default="tei",
+        description="The single reranker selector:\n"
+        "  tei      — BAAI/bge-reranker-v2-m3 on text-embeddings-inference (default,\n"
+        "             best measured: MRR@5 0.8691 hybrid)\n"
+        "  qwen3    — Qwen3-Reranker-0.6B, in-process. Measurably worse on this\n"
+        "             corpus (6/6 losses, see post_sidang_exp/reranker_new)\n"
+        "  infinity — legacy michaelf34/infinity; identical scores to tei, retired\n"
+        "Supersedes QWEN3_RERANKER_ENABLED, which is still honoured for "
+        "backwards compatibility but should be considered deprecated.",
+    )
+    base_url: str = Field(default="http://127.0.0.1:7996")
+    model: str = Field(
+        default="BAAI/bge-reranker-v2-m3",
+        description="Informational for TEI (the server picks its own model via "
+        "--model-id); sent in the request body for Infinity.",
+    )
+    model_config = SettingsConfigDict(env_file=".env", env_prefix="RERANKER_", extra="ignore")
+
+@lru_cache
+def get_reranker_settings() -> RerankerSettings: return RerankerSettings()
 
 
 class BGEM3Settings(BaseSettings):
@@ -162,6 +253,66 @@ class BGEM3Settings(BaseSettings):
 def get_bge_m3_settings() -> BGEM3Settings: return BGEM3Settings()
 
 
+class Qwen3Settings(BaseSettings):
+    """Configuration for the in-process Qwen3 embedder + reranker.
+
+    Both run in-process rather than on Infinity because the pinned Infinity
+    image ships transformers 4.49 and Qwen3 needs >= 4.51 (michaelfeil/infinity#611).
+
+    ``embedder_enabled`` selects the whole dense stack: off keeps BGE-M3,
+    on switches to Qwen3 + ``sparse_encoder``. Point ``QDRANT_COLLECTION_NAME``
+    at a fresh collection when enabling — Qwen3 is also 1024-dim, so Qdrant will
+    silently accept Qwen3 vectors into a BGE-M3 collection and mix two
+    incompatible embedding spaces with no error.
+    """
+
+    embedder_enabled: bool = Field(
+        default=False,
+        description="Use Qwen3-Embedding instead of BGE-M3 for dense vectors.",
+    )
+    embedder_model: str = Field(default="Qwen/Qwen3-Embedding-0.6B")
+    sparse_encoder: str = Field(
+        default="bm25",
+        description="Sparse producer when Qwen3 is active: 'bm25' (FastEmbed, "
+        "CPU) or 'bge-m3' (BGE-M3 lexical weights on CPU, identical to the "
+        "current collection's sparse channel).",
+    )
+    reranker_enabled: bool = Field(
+        default=False,
+        description="Use the in-process Qwen3 reranker instead of Infinity's "
+        "bge-reranker-v2-m3. Independent of embedder_enabled — the reranker is "
+        "query-time only and needs no reindex.",
+    )
+    reranker_model: str = Field(default="Qwen/Qwen3-Reranker-0.6B")
+    # Both instructions are query-time only — documents are embedded and scored
+    # without them — so changing either is a restart, never a re-embed. That
+    # makes them cheap to ablate against an existing collection.
+    # Empty = the module default in qwen3_embeddings / qwen3_reranker.
+    query_instruction: str = Field(
+        default="",
+        description="Task description for Qwen3-Embedding's 'Instruct:' query "
+        "prefix. Omitting the prefix entirely costs 1-5% retrieval performance "
+        "per the model card.",
+    )
+    rerank_instruction: str = Field(
+        default="",
+        description="Task description injected as <Instruct> in the reranker's "
+        "yes/no prompt.",
+    )
+    device: str = Field(default="cuda", description="'cuda' or 'cpu'.")
+    use_fp16: bool = Field(default=True)
+    embed_batch_size: int = Field(default=8)
+    rerank_batch_size: int = Field(default=4)
+    # 16k, not the model's 32k: parents are ~4096 chars (~1.2k tokens), but the
+    # HyDE probe concatenates several passages on the query side, and anything
+    # over the budget is silently truncated away rather than erroring.
+    rerank_max_length: int = Field(default=16384)
+    model_config = SettingsConfigDict(env_file=".env", env_prefix="QWEN3_", extra="ignore")
+
+@lru_cache
+def get_qwen3_settings() -> Qwen3Settings: return Qwen3Settings()
+
+
 class VLMSettings(BaseSettings):
     """Configuration for Vision-Language Model enrichment of visual elements.
 
@@ -172,6 +323,17 @@ class VLMSettings(BaseSettings):
     text, filtered out by the chunker).
     """
 
+    strict: bool = Field(
+        default=True,
+        description=(
+            "Fail loudly when VLM is unavailable or a call errors, instead of "
+            "degrading to heuristic text. Ingestion is write-once and its output "
+            "is what every later stage reads, so a silent fallback bakes "
+            "unusable OCR into the index and looks like a retrieval problem "
+            "months later. Set false only for a deliberate no-VLM run."
+        ),
+        validation_alias="VLM_STRICT",
+    )
     mode: str = Field(
         default="fallback",
         description="VLM provider mode: 'cloud', 'local', or 'fallback'.",
@@ -232,5 +394,42 @@ def get_vlm_settings() -> VLMSettings:
         VLMSettings: The cached settings instance.
     """
     return VLMSettings()
+
+
+class RetrievalSettings(BaseSettings):
+    """Retrieval strategy selection — a global config default, not a
+    per-request parameter. Future strategies are added to the ``strategy``
+    literal and implemented in ``app/kb/application/retrieval_strategies.py``.
+    """
+
+    strategy: Literal["baseline", "date_priority"] = Field(
+        default="baseline",
+        description="Retrieval strategy: 'baseline' (score only) or "
+        "'date_priority' (penalize older documents by release date).",
+    )
+    date_priority_lambda: float = Field(
+        default=DEFAULT_DATE_PRIORITY_LAMBDA,
+        description="Decay strength for the 'date_priority' strategy.",
+    )
+    rerank_probe: Literal["query", "hyde"] = Field(
+        default="hyde",
+        description=(
+            "What the cross-encoder scores candidates against when HyDE ran: "
+            "'query' (the raw user question) or 'hyde' (the generated passage). "
+            "HyDE is the point of HyDE — the hypothetical answer is a better "
+            "probe than the question. Measured on this KB, 'hyde' recovered two "
+            "queries the raw probe lost entirely ('berapa UKT 2026', 'berapa "
+            "biaya UKT di UPI' — both from absent to rank 1) at the cost of one "
+            "rank-1→rank-2 slip, with six ties. Falls back to the raw query "
+            "whenever no expansion ran, so this is a no-op with HyDE disabled."
+        ),
+    )
+    model_config = SettingsConfigDict(env_file=".env", env_prefix="RETRIEVAL_", extra="ignore")
+
+
+@lru_cache
+def get_retrieval_settings() -> RetrievalSettings:
+    """Returns the cached RetrievalSettings singleton."""
+    return RetrievalSettings()
 
 

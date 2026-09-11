@@ -7,6 +7,7 @@ import re
 import shutil
 import uuid
 import structlog
+from datetime import datetime
 from typing import List, Optional, Any
 from fastapi import BackgroundTasks, UploadFile
 
@@ -69,13 +70,76 @@ class KBApplicationService:
         """Return all KB documents (passthrough to ``IKBRepository``)."""
         return await self.kb_repo.get_all_pdfs()
 
+    async def search_pdfs(
+        self,
+        search: Optional[str] = None,
+        active: Optional[bool] = None,
+        released_from: Optional[datetime] = None,
+        released_to: Optional[datetime] = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[List[PDFDocument], int]:
+        """Paginated + filtered listing for the admin UI."""
+        offset = (page - 1) * page_size
+        return await self.kb_repo.query_pdfs(
+            search=search,
+            active=active,
+            released_from=released_from,
+            released_to=released_to,
+            offset=offset,
+            limit=page_size,
+        )
+
+    async def bulk_update_status(self, pdf_ids: List[str], active: bool) -> dict[str, Any]:
+        """Activate/deactivate many documents, mirroring each into Qdrant.
+
+        Batches the Postgres UPDATE and the Qdrant payload write (single call
+        each) instead of N+1 per-id round-trips.
+        """
+        updated_ids = await self.kb_repo.bulk_update_active_status(pdf_ids, active)
+        if updated_ids:
+            await self.vector_store.update_payloads(updated_ids, {"is_active": active})
+        return {"updated": len(updated_ids), "missing": len(pdf_ids) - len(updated_ids)}
+
+    async def bulk_delete(self, pdf_ids: List[str]) -> dict[str, Any]:
+        """Delete many documents across Postgres + Qdrant + disk.
+
+        Batches the DB DELETE and the Qdrant delete (single call each); on-disk
+        files are removed per-document (filesystem can't batch, but the doc
+        fetch is one query).
+        """
+        docs = await self.kb_repo.get_pdfs_by_ids(pdf_ids)
+        existing = {d.id: d for d in docs}
+        existing_ids = [d.id for d in docs]
+
+        if existing_ids:
+            await self.kb_repo.bulk_delete_pdfs(existing_ids)
+            await self.vector_store.delete_by_doc_ids(existing_ids)
+
+        for pdf_id in existing_ids:
+            doc = existing[pdf_id]
+            if doc.pdf_path and os.path.exists(str(doc.pdf_path)):
+                try:
+                    os.remove(str(doc.pdf_path))
+                except OSError as exc:
+                    logger.warning("kb.delete.file_remove_failed", pdf_id=pdf_id, error=str(exc))
+
+        return {"deleted": len(existing_ids), "missing": len(pdf_ids) - len(existing_ids)}
+
     async def naive_title_search(self, query: str) -> List[PDFDocument]:
         """Passthrough to ``IKBRepository.search_titles_naive`` — see there
         for why this literal ILIKE search exists alongside the real
         hybrid-search pipeline."""
         return await self.kb_repo.search_titles_naive(query)
 
-    async def upload_pdf(self, title: str, description: str, file: UploadFile, bg_tasks: BackgroundTasks) -> PDFDocument:
+    async def upload_pdf(
+        self,
+        title: str,
+        description: str,
+        file: UploadFile,
+        bg_tasks: BackgroundTasks,
+        released_date: Optional[datetime] = None,
+    ) -> PDFDocument:
         """Save one uploaded PDF to disk, record it, and schedule ingestion.
 
         Touches the filesystem (safe-named file under ``upload_dir``) and
@@ -87,7 +151,12 @@ class KBApplicationService:
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        pdf_doc = await self.kb_repo.create_pdf(title=title, description=description, pdf_path=file_path)
+        pdf_doc = await self.kb_repo.create_pdf(
+            title=title,
+            description=description,
+            pdf_path=file_path,
+            released_date=released_date,
+        )
         
         # Trigger ingestion in the background
         bg_tasks.add_task(self.ingest_worker.ingest_document, doc_id=str(pdf_doc.id))
@@ -100,6 +169,7 @@ class KBApplicationService:
         titles: List[str],
         descriptions: List[str],
         bg_tasks: BackgroundTasks,
+        released_dates: Optional[List[Optional[datetime]]] = None,
     ) -> tuple[List[PDFDocument], List[dict[str, str]]]:
         """Upload multiple PDFs and trigger background ingestion for each.
 
@@ -109,13 +179,20 @@ class KBApplicationService:
         can't roll back already-succeeded files. On failure the session is
         rolled back (clearing its errored state) and the loop continues.
 
+        ``released_dates`` is optional and matched by index; missing entries
+        default to None.
+
         Returns:
             (successfully created PDFDocuments, [{"filename", "error"}, ...]).
         """
         results: List[PDFDocument] = []
         failures: List[dict[str, str]] = []
 
-        for file, title, description in zip(files, titles, descriptions):
+        dates = list(released_dates) if released_dates else []
+        while len(dates) < len(files):
+            dates.append(None)
+
+        for file, title, description, released_date in zip(files, titles, descriptions, dates):
             safe_filename = file.filename or "upload.pdf"
             try:
                 file_path = os.path.join(self.upload_dir, _safe_upload_filename(file.filename))
@@ -127,6 +204,7 @@ class KBApplicationService:
                     title=title,
                     description=description,
                     pdf_path=file_path,
+                    released_date=released_date,
                 )
                 bg_tasks.add_task(self.ingest_worker.ingest_document, doc_id=str(pdf_doc.id))
                 await self.kb_repo.commit()

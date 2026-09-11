@@ -15,6 +15,7 @@ injected across the boundary); :class:`IReranker` → ``infinity_reranker.Infini
 
 from typing import Protocol, List, Optional, Any, Dict
 from dataclasses import dataclass
+from datetime import datetime
 from app.kb.domain.models import PDFDocument, ParentChunk, IngestionTask, ChildChunk
 from app.rag.chunking.models import ParsedElement
 
@@ -52,9 +53,16 @@ class ITextEmbedder(Protocol):
     HTTP-backed alternative is ``infinity_embeddings.py::InfinityEmbeddings``.
     """
 
-    async def embed_texts(self, texts: List[str]) -> List[EmbeddingResult]:
+    async def embed_texts(
+        self, texts: List[str], is_query: bool = False
+    ) -> List[EmbeddingResult]:
         """Embed a batch of texts, returning one :class:`EmbeddingResult` per
         input in order.
+
+        ``is_query`` marks the batch as search queries rather than corpus
+        documents. Symmetric models (BGE-M3) ignore it; asymmetric ones
+        (Qwen3-Embedding) prepend their instruction prefix to queries only,
+        and BM25 sparse encoders skip document-side IDF weighting for queries.
         """
         ...
 
@@ -182,8 +190,16 @@ class IVectorStore(Protocol):
         """Update payload fields for all points of a given doc_id."""
         ...
 
+    async def update_payloads(self, doc_ids: List[str], payload: Dict[str, Any]) -> None:
+        """Update payload fields for all points of the given doc_ids (bulk)."""
+        ...
+
     async def delete_by_doc_id(self, doc_id: str) -> None:
         """Delete all points belonging to a document (cascade on doc removal)."""
+        ...
+
+    async def delete_by_doc_ids(self, doc_ids: List[str]) -> None:
+        """Delete all points belonging to the given doc_ids (bulk)."""
         ...
 
     async def close(self) -> None:
@@ -198,6 +214,18 @@ class IKBRepository(Protocol):
 
     async def get_all_pdfs(self) -> List[PDFDocument]:
         """Return all KB documents."""
+        ...
+
+    async def query_pdfs(
+        self,
+        search: Optional[str] = None,
+        active: Optional[bool] = None,
+        released_from: Optional[datetime] = None,
+        released_to: Optional[datetime] = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[List[PDFDocument], int]:
+        """Paginated + filtered document listing. Returns (items, total)."""
         ...
 
     async def get_pdf_by_id(self, pdf_id: str) -> Optional[PDFDocument]:
@@ -220,8 +248,16 @@ class IKBRepository(Protocol):
         """Toggle a document's active flag (inactive docs are excluded from retrieval)."""
         ...
 
+    async def bulk_update_active_status(self, pdf_ids: List[str], active: bool) -> List[str]:
+        """Toggle ``active`` on many documents in a single UPDATE; returns the ids that existed."""
+        ...
+
     async def delete_pdf(self, pdf_id: str) -> bool:
         """Delete a document and its chunks. Returns True if deleted."""
+        ...
+
+    async def bulk_delete_pdfs(self, pdf_ids: List[str]) -> List[str]:
+        """Delete many documents (chunks cascade via FK) in a single DELETE; returns the ids that existed."""
         ...
 
     async def save_parent_chunks(self, chunks: List[ParentChunk]) -> List[ParentChunk]:

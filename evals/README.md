@@ -4,8 +4,8 @@ Standalone evaluation harnesses for the JDIH RAG chatbot: the thesis
 experiments (exp1a–1d, exp2, exp2a, exp3, exp4), the post-defense feasibility
 probes and experiments (E1–E6), and the blind human-audit workflow.
 
-Everything talks to the **running application's API** or the **Infinity
-inference server** directly — it never touches the production database.
+Everything talks to the **running application's API** or the inference
+microservices directly: it never touches the production database.
 
 ## Layout
 
@@ -34,9 +34,7 @@ evals/
 1. **Infrastructure**
 
    ```bash
-   docker compose up -d postgres qdrant infinity
-   # the Indonesian prompt-guard fine-tune, if comparing guards:
-   docker compose --profile finetuned up -d prompt-guard-ft
+   COMPOSE_PROFILES=guard-ft,nli-indoroberta docker compose up -d
    ```
 
 2. **The app** (for Exp 1b, 2, 4):
@@ -58,7 +56,7 @@ evals/
 > **resumable**: re-running skips rows already present in its output CSV, so a
 > crash never re-spends API credit.
 
-### Experiment 1a — IVM Safety (SLM vs prompting baseline) — Subset B
+### Experiment 1a: IVM Safety (SLM vs prompting baseline) - Subset B
 
 SLM (`Llama-Prompt-Guard-2-86M`) safety classifier vs a zero-shot LLM baseline.
 
@@ -71,7 +69,7 @@ python -m evals.exp1a_safety.run \
     --slm-model meta-llama/Llama-Prompt-Guard-2-86M
 ```
 
-### Experiment 1b — IVM Relevance (LLM-judge vs keyword overlap) — Subset C
+### Experiment 1b: IVM Relevance (LLM-judge vs keyword overlap) - Subset C
 
 **Metrics**: Accuracy, Precision, Recall, F1, FPR + bootstrap CI (overall and per subtype).
 
@@ -81,7 +79,7 @@ python -m evals.exp1b_relevance.run \
     --api-url http://localhost:8000
 ```
 
-### Experiment 1c — Nonce / instruction-hijack robustness — Subset B
+### Experiment 1c: Nonce / instruction-hijack robustness - Subset B
 
 **Metrics**: detection rate on nonce-token hijack probes; resumable with `--resume`.
 
@@ -90,7 +88,7 @@ python -m evals.exp1c_nonce.run_v2 --resume
 python -m evals.exp1c_nonce.run_v2 --dry-run --limit 4
 ```
 
-### Experiment 1d — Boundary relevance (OOD behaviour) — Subset C
+### Experiment 1d: Boundary relevance (OOD behaviour) - Subset C
 
 **Metrics**: abstention accuracy at the in/out-of-domain boundary; resumable with `--resume`.
 
@@ -99,7 +97,7 @@ python -m evals.exp1d_boundary.run --dry-run --limit 2
 python -m evals.exp1d_boundary.run --resume
 ```
 
-### Experiment 2 — Retrieval quality — Subset A
+### Experiment 2: Retrieval quality - Subset A
 
 **Metrics**: Hit Rate@k (k=1,3,5), MRR, per category and overall.
 
@@ -110,7 +108,7 @@ python -m evals.exp2_retrieval.run \
     --mode all
 ```
 
-### Experiment 2a — Chunking-strategy ablation — Subset A + manifest
+### Experiment 2a: Chunking-strategy ablation - Subset A + manifest
 
 **Metrics**: Hit@k/MRR per chunking strategy on the seeded 300-doc manifest.
 
@@ -123,7 +121,7 @@ python -m evals.exp2a_chunking.run_v2 --evaluate --skip-llm
 python -m evals.exp2a_chunking.run_v2 --evaluate --resume
 ```
 
-### Experiment 3 — RAM hallucination detection (NLI vs token-Jaccard) — Subset D
+### Experiment 3: RAM hallucination detection (NLI vs token-Jaccard) - Subset D
 
 **Metrics**: Accuracy, per-class P/R/F1 (macro), Cohen's Kappa + bootstrap CI.
 
@@ -134,7 +132,7 @@ python -m evals.exp3_ram.run \
     --nli-model StevenLimcorn/indo-roberta-indonli
 ```
 
-### Experiment 4 — End-to-end (guardrails vs no-guardrail baseline) — Subset A
+### Experiment 4: End-to-end (guardrails vs no-guardrail baseline) - Subset A
 
 **Metrics**: BERTScore F1, Faithfulness, Abstention Accuracy + CI.
 
@@ -205,7 +203,7 @@ python -m evals.blind_test.score_blind_test_ad_v2 evals/data/blind_check_ad_v2.r
 
 ## Dataset formats (evals/data/)
 
-### Subset A — RAG QA triplets (Exp 2, 4)
+### Subset A: RAG QA triplets (Exp 2, 4)
 
 | question | category | ground_truth_answer | source_doc_id | source_context |
 |---|---|---|---|---|
@@ -213,7 +211,7 @@ python -m evals.blind_test.score_blind_test_ad_v2 evals/data/blind_check_ad_v2.r
 
 Categories: `factual`, `procedural`, `multi-hop`, `out-of-domain`.
 
-### Subset B — Adversarial inputs (Exp 1a, 1c)
+### Subset B: Adversarial inputs (Exp 1a, 1c)
 
 | query | label | attack_type |
 |---|---|---|
@@ -222,7 +220,7 @@ Categories: `factual`, `procedural`, `multi-hop`, `out-of-domain`.
 
 Attack types: `jailbreak`, `dan_attempt`, `hidden_instruction`, `safe_normal`, `safe_complex`.
 
-### Subset C — Boundary relevance (Exp 1b, 1d)
+### Subset C: Boundary relevance (Exp 1b, 1d)
 
 | query | label | subtype |
 |---|---|---|
@@ -231,7 +229,7 @@ Attack types: `jailbreak`, `dan_attempt`, `hidden_instruction`, `safe_normal`, `
 
 Subtypes: `direct_upi`, `indirect_upi` (in-domain); `near_miss_government`, `adjacent_legal`, `off_topic` (out-of-domain).
 
-### Subset D — RAM ground truth (Exp 3)
+### Subset D: RAM ground truth (Exp 3)
 
 | question_id | question | full_response | sentence_id | sentence_text | retrieved_context | label | verifier_note |
 |---|---|---|---|---|---|---|---|
@@ -243,14 +241,14 @@ Labels: `supported`, `partially_supported`, `not_supported`, `no_source_needed`.
 
 | Metric | Used in | CI method |
 |---|---|---|
-| Accuracy | Exp 1a, 1b, 3 | Bootstrap (1000×) |
-| Precision / Recall / F1 | Exp 1a, 1b, 3 | — |
-| FPR | Exp 1a, 1b | — |
-| Hit Rate@k / MRR | Exp 2, 2a | — |
-| BERTScore F1 | Exp 4 | Bootstrap (1000×) |
-| Faithfulness | Exp 4 | Bootstrap (1000×) |
+| Accuracy | Exp 1a, 1b, 3 | Bootstrap (1000x) |
+| Precision / Recall / F1 | Exp 1a, 1b, 3 | N/A |
+| FPR | Exp 1a, 1b | N/A |
+| Hit Rate@k / MRR | Exp 2, 2a | N/A |
+| BERTScore F1 | Exp 4 | Bootstrap (1000x) |
+| Faithfulness | Exp 4 | Bootstrap (1000x) |
 | Abstention Accuracy | Exp 4 | Wilson interval |
-| Cohen's Kappa | Exp 3 | Bootstrap (1000×) |
+| Cohen's Kappa | Exp 3 | Bootstrap (1000x) |
 
 ## Design notes
 

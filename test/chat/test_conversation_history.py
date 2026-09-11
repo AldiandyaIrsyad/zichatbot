@@ -50,6 +50,16 @@ class FakeContext:
     chunk_id: str = "chunk-1"
     path: str = "1"
     doc_id: str = "doc-1"
+    child_text: str = ""
+    parent_chunk_id: str = ""
+
+
+@dataclass
+class FakeDocument:
+    content: str = "Isi peraturan terkait."
+    title: str = "Peraturan X"
+    doc_id: str = "doc-1"
+    released_date: Optional[str] = None
 
 
 class TestBuildHistory:
@@ -174,10 +184,10 @@ def _make_service(**overrides) -> tuple[ChatService, dict]:
 
     search_service = AsyncMock()
     search_service.search = AsyncMock(return_value=[FakeContext()])
+    search_service.aggregate_documents = AsyncMock(return_value=[FakeDocument()])
 
     ram_service = AsyncMock()
-    ram_service.build_premise = MagicMock(return_value="premise")
-    ram_service.assess_sentence = AsyncMock(
+    ram_service.assess_claim = AsyncMock(
         return_value=NLIResult(
             label="entailment", entailment_score=0.9, contradiction_score=0.0,
             source_title="Peraturan X", page=1, doc_id="doc-1",

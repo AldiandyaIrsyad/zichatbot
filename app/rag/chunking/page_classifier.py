@@ -121,6 +121,66 @@ DEFAULT_GARBAGE_RATIO_THRESHOLD = 0.7
 # iff the page is genuinely a scanned image with no real text layer.
 NATIVE_TEXT_LEN_THRESHOLD = 30
 
+# Minimum non-garbage characters the parser must have produced for a page to
+# count as read. Roughly a short paragraph: enough to distinguish a page the
+# parser genuinely transcribed from one where it emitted a letterhead fragment
+# and gave up.
+PARSED_EFFECTIVELY_MIN_CHARS = 200
+
+# Minimum rows (header + one data row) for a table element to count as a real
+# table rather than a stray single line of pipes.
+_MIN_TABLE_ROWS = 2
+
+
+def _table_row_count(text: str) -> int:
+    """Rows in a table element, whether it arrived as Markdown or as HTML."""
+    stripped = text.strip()
+    if not stripped:
+        return 0
+    pipe_rows = sum(1 for line in stripped.splitlines() if line.strip().startswith("|"))
+    if pipe_rows:
+        return pipe_rows
+    return stripped.lower().count("<tr")
+
+
+def parsed_effectively(elements: List[ParsedElement]) -> bool:
+    """Did the parser read this page well enough that a VLM pass would lose data?
+
+    The VISUAL route replaces a page's parser output with a VLM transcription of
+    the page image. That is the right trade when the parser produced nothing
+    usable, and the wrong one when it produced a good table: the VLM's prose
+    transcription of a dense tariff table comes back compressed or truncated,
+    and the numbers it drops are unrecoverable downstream. Measured on this
+    corpus before the guard existed: 306 table-bearing pages had been replaced
+    by VLM narration across 214 documents, and 157 of those transcriptions ended
+    mid-row.
+
+    So the override is now conditional on the parser having failed, which is what
+    the classification was always a proxy for:
+
+    - a table element with at least a header and one row → the parser read it
+    - otherwise, ``PARSED_EFFECTIVELY_MIN_CHARS`` of non-garbage text outside the
+      image elements → the parser read it
+
+    Image elements' own OCR text is deliberately not counted: on a scanned page
+    that text *is* the garbage signal. Images still reach the VLM through the
+    per-element figure path either way — a real picture is exactly what the VLM
+    is for.
+    """
+    text_chars = 0
+    for element in elements:
+        if element.element_type in _TABLE_ELEMENT_TYPES:
+            if _table_row_count(element.text or "") >= _MIN_TABLE_ROWS:
+                return True
+            continue
+        if element.element_type in _VISUAL_ELEMENT_TYPES:
+            continue
+        stripped = (element.text or "").strip()
+        if stripped and not _is_garbage_ocr_text(stripped):
+            text_chars += len(stripped)
+    return text_chars >= PARSED_EFFECTIVELY_MIN_CHARS
+
+
 # Prompt for VLM full-page extraction (Indonesian output)
 VLM_PAGE_EXTRACTION_PROMPT = (
     "Ekstrak SEMUA konten dari halaman dokumen ini dalam format Markdown yang bersih. "

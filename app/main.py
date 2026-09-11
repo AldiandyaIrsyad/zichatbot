@@ -31,6 +31,7 @@ from app.chat.api import router as chat_router
 from app.kb.config import get_qdrant_settings
 from app.kb.infra.qdrant_store import QdrantStore
 from app.kb.dependency import get_vector_store, get_document_parser, get_reranker, get_text_embedder
+from app.chat.dependency import get_llm_connection, get_nli_client
 
 setup_logging()
 logger = structlog.get_logger(__name__)
@@ -99,6 +100,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     ))
                     logger.info("db.alter_table", table="messages", column=col_name)
 
+            # Guarded ALTER TABLE for pdf_documents.released_date (added for
+            # date-priority retrieval). create_all won't add it to a pre-existing
+            # table, so any DB created before this column was introduced gets it
+            # here. Nullable, matching the SQLAlchemy model.
+            result = await conn.execute(text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'pdf_documents'"
+            ))
+            existing_pdf_cols = {row[0] for row in result}
+            if "released_date" not in existing_pdf_cols:
+                await conn.execute(text(
+                    "ALTER TABLE pdf_documents ADD COLUMN released_date TIMESTAMP WITH TIME ZONE"
+                ))
+                logger.info("db.alter_table", table="pdf_documents", column="released_date")
+
     # Initialize Qdrant collection (main retrieval)
     kb_config = get_qdrant_settings()
     qdrant_store = QdrantStore(
@@ -111,14 +127,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     yield
 
-    # Close the process-lifetime singleton clients from app.kb.dependency
-    # (each wraps an httpx.AsyncClient or in-process model that would
-    # otherwise leak). Only close getters actually called this run
-    # (cache_info().currsize > 0) so an unused one isn't instantiated just to
-    # be closed — for get_text_embedder() that would load the whole BGE-M3
-    # model on the way out. Per-client try/except so one failure doesn't
-    # block the rest.
-    for getter in (get_document_parser, get_reranker, get_text_embedder, get_vector_store):
+    # Close the process-lifetime singleton clients from app.kb.dependency and
+    # app.chat.dependency (each wraps an httpx.AsyncClient, AsyncOpenAI, or an
+    # in-process model that would otherwise leak). Only close getters actually
+    # called this run (cache_info().currsize > 0) so an unused one isn't
+    # instantiated just to be closed — for get_text_embedder() that would load
+    # the whole BGE-M3 model on the way out. Per-client try/except so one
+    # failure doesn't block the rest.
+    for getter in (
+        get_document_parser,
+        get_reranker,
+        get_text_embedder,
+        get_vector_store,
+        get_llm_connection,
+        get_nli_client,
+    ):
         if getter.cache_info().currsize == 0:
             continue
         closeable = getter()

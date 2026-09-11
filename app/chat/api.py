@@ -12,11 +12,12 @@ from app.chat.application.chat_service import ChatService
 from app.chat.config import ChatConfig, get_chat_config
 from app.chat.dependency import get_attachment_service, get_chat_service, get_query_expander
 from app.chat.infra import PdfCorruptError, PdfNoTextError, PdfTooManyPagesError
-from app.kb.api import SearchResultItem
+from app.kb.api import DocumentSearchResultItem
 from app.kb.application.search_service import SearchService
 from app.kb.dependency import (
     get_kb_repo,
     get_reranker,
+    get_retrieval_strategy,
     get_text_embedder,
     get_vector_store,
 )
@@ -152,10 +153,10 @@ async def extract_attachment(
     }
 
 
-@router.get("/api/chat/search", response_model=List[SearchResultItem])
+@router.get("/api/chat/search", response_model=List[DocumentSearchResultItem])
 async def chat_search(
     q: str = Query(..., min_length=1, description="Search query"),
-    top_k: int = Query(default=15, ge=1, le=100, description="Number of results to return"),
+    top_k: int = Query(default=15, ge=1, le=100, description="Number of documents to return"),
     mode: str = Query(default="hybrid", description="Retrieval mode: hybrid, dense, or sparse"),
     rerank: bool = Query(default=True, description="Apply the cross-encoder reranker"),
     hyde: bool = Query(default=True, description="Apply HyDE query expansion before retrieval"),
@@ -164,7 +165,8 @@ async def chat_search(
     repo=Depends(get_kb_repo),
     reranker=Depends(get_reranker),
     expander: Optional[IQueryExpander] = Depends(get_query_expander),
-) -> List[SearchResultItem]:
+    strategy=Depends(get_retrieval_strategy),
+) -> List[DocumentSearchResultItem]:
     """Retrieval endpoint with a per-request HyDE toggle (Experiment 2 ablation).
 
     Identical to ``/api/kb/search`` except it can inject the chat pipeline's
@@ -173,7 +175,7 @@ async def chat_search(
     the single toggled variable on an otherwise-identical path: ``hyde=false``
     reproduces ``/api/kb/search``. HyDE engages only when ``CHAT_HYDE_ENABLED``
     is set; with ``hyde=false`` the expander is dropped and the raw query is
-    embedded.
+    embedded. The configured retrieval strategy (config default) still applies.
     """
     search_service = SearchService(
         text_embedder=embedder,
@@ -181,18 +183,18 @@ async def chat_search(
         kb_repo=repo,
         reranker=reranker,
         query_expander=expander if hyde else None,
+        retrieval_strategy=strategy,
     )
-    contexts = await search_service.search(query=q, top_k=top_k, mode=mode, rerank=rerank)
+    documents = await search_service.search_documents(
+        query=q, top_k=top_k, mode=mode, rerank=rerank
+    )
     return [
-        SearchResultItem(
-            chunk_id=c.chunk_id,
-            parent_chunk_id=c.parent_chunk_id,
-            doc_id=c.doc_id,
-            text=c.text,
-            score=c.score,
-            source_title=c.source_title,
-            page=c.page,
-            breadcrumbs=c.breadcrumbs,
+        DocumentSearchResultItem(
+            doc_id=d.doc_id,
+            title=d.title,
+            released_date=d.released_date,
+            content=d.content,
+            score=d.score,
         )
-        for c in contexts
+        for d in documents
     ]

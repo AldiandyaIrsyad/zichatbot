@@ -31,6 +31,16 @@ class FakeContext:
     chunk_id: str = "chunk-1"
     path: str = "1"
     doc_id: str = "doc-1"
+    child_text: str = ""
+    parent_chunk_id: str = ""
+
+
+@dataclass
+class FakeDocument:
+    content: str = "Isi peraturan terkait."
+    title: str = "Peraturan X"
+    doc_id: str = "doc-1"
+    released_date: Optional[str] = None
 
 
 async def _fake_llm_stream(**kwargs):
@@ -47,13 +57,13 @@ def _make_chat_service() -> tuple[ChatService, dict]:
 
     search_service = AsyncMock()
     search_service.search = AsyncMock(return_value=[FakeContext()])
+    search_service.aggregate_documents = AsyncMock(return_value=[FakeDocument()])
 
     ivm_service = AsyncMock()
     relevance_service = AsyncMock()
 
     ram_service = AsyncMock()
-    ram_service.build_premise = MagicMock(return_value="premise")
-    ram_service.assess_sentence = AsyncMock(return_value=None)
+    ram_service.assess_claim = AsyncMock(return_value=None)
 
     service = ChatService(
         chat_repo=chat_repo,

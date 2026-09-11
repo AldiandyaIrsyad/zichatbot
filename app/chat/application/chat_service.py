@@ -6,30 +6,37 @@ and the LLM inference engine.
 """
 
 import json
-import re
 import uuid
+import asyncio
 import structlog
 from typing import AsyncGenerator, List, Dict, Any, Optional, Tuple
 
-from app.chat.application.history import build_history, format_history_for_condenser
+from app.chat.application.history import (
+    approx_token_count,
+    build_history,
+    format_history_for_condenser,
+)
 from app.chat.application.query_condenser import QueryCondenser
 from app.chat.domain.interfaces import IChatRepository, ILLMConnection
+from app.chat.domain.usage import collect_usage
 from app.kb.application.search_service import SearchService
 from app.guardrails.ivm.service import IVMService, MaliciousPromptException
 from app.guardrails.ivm.relevance_service import RelevanceService, IrrelevantQueryException
 from app.rag.prompts import build_prompt
-from app.guardrails.ram.service import RAMService
-from app.guardrails.ram.interfaces import RetrievedContext as RAMRetrievedContext
-from app.guardrails.ram.text_utils import split_sentences_with_seps
+from app.guardrails.ram.service import LABEL_CONTRADICTION, RAMService
+from app.guardrails.ram.interfaces import ClaimUnit, RetrievedContext as RAMRetrievedContext
+from app.guardrails.ram.claim_parser import (
+    extract_citations,
+    parse_table_block,
+    split_cells,
+    split_claims,
+)
+from app.guardrails.ram.clause_splitter import ClauseSplitter
+from app.guardrails.ram.text_utils import is_unciteable_statement
 
 logger = structlog.get_logger(__name__)
 
-# A Markdown table row (header, separator, or data row) starts and ends with
-# "|". Keeps citation markers off table rows — appending text after a row's
-# closing "|" would corrupt GFM table syntax.
-_TABLE_ROW_RE = re.compile(r'^\s*\|.*\|\s*$')
-
-# Minimum proposition length (chars) worth an NLI call.
+# Minimum claim length (chars) worth an NLI call / an "Unverified" flag.
 MIN_ASSESSABLE_LENGTH = 8
 
 class ChatService:
@@ -65,9 +72,11 @@ class ChatService:
         ram_service: RAMService,
         model_name: str,
         system_prompt: str,
+        clause_splitter: Optional[ClauseSplitter] = None,
         temperature: float = 0.0,
         attachment_search_excerpt_chars: int = 4000,
         history_max_tokens: int = 3000,
+        context_max_tokens: int = 6000,
         query_condenser: Optional[QueryCondenser] = None,
         refusal_message: str = "Maaf, pertanyaan ini tidak tercakup dalam dokumen yang tersedia.",
         safety_block_message: str = "Maaf, permintaan ini diblokir oleh filter keamanan.",
@@ -78,9 +87,11 @@ class ChatService:
         ``attachment_search_excerpt_chars`` caps how much of an uploaded
         attachment's text is folded into the KB search query (the full text
         still goes to the LLM prompt). ``history_max_tokens`` budgets the
-        replayed conversation history. ``query_condenser`` rewrites elliptical
-        follow-ups for retrieval; None disables condensation. The three message
-        strings are the user-facing refusal/error texts.
+        replayed conversation history. ``context_max_tokens`` budgets the
+        retrieved context block (see ``_clamp_contexts``). ``query_condenser``
+        rewrites elliptical follow-ups for retrieval; None disables
+        condensation. The three message strings are the user-facing
+        refusal/error texts.
         """
         self.chat_repo = chat_repo
         self.llm_conn = llm_conn
@@ -88,11 +99,13 @@ class ChatService:
         self.ivm_service = ivm_service
         self.relevance_service = relevance_service
         self.ram_service = ram_service
+        self.clause_splitter = clause_splitter
         self.model_name = model_name
         self.system_prompt = system_prompt
         self.temperature = temperature
         self.attachment_search_excerpt_chars = attachment_search_excerpt_chars
         self.history_max_tokens = history_max_tokens
+        self.context_max_tokens = context_max_tokens
         self.query_condenser = query_condenser
         self.refusal_message = refusal_message
         self.safety_block_message = safety_block_message
@@ -143,36 +156,19 @@ class ChatService:
 
     @staticmethod
     def _format_citation(result: Any) -> str:
-        """Format an NLI result into a canonical citation marker.
+        """Format an NLI result into the citation badge grammar.
 
-        Produces ``*(STATUS: SCORE; SOURCE; Page N; DocID:ID; Evidence:"snippet")*``
-        where STATUS is Supported/Contradiction and SCORE the dominant NLI
-        confidence; SOURCE, Page, DocID, and Evidence appear only when present
-        (DocID enables a frontend "Download PDF" link). Parsed by the frontend
-        ``renderMessage`` to render citation badges with tooltips.
-
-        Returns "" for None or non-Supported/Contradiction labels (neutral and
-        error-fallback results carry nothing useful to show).
+        Always includes all three per-class scores so the frontend can show
+        Supported / Neutral / Contradicted together; source/page/doc_id/
+        evidence appear only when present. Returns "" for None.
         """
         if result is None:
             return ""
-
-        label_map = {
-            "entailment": "Supported",
-            "contradiction": "Contradiction",
-        }
-        status = label_map.get(result.label)
-        if status is None:
-            return ""
-
-        # Pick the dominant score for the predicted label
-        score_map = {
-            "entailment": result.entailment_score,
-            "contradiction": result.contradiction_score,
-        }
-        score = score_map[result.label]
-
-        parts = [f"{status}: {score:.2f}"]
+        parts = [
+            f"Supported:{result.entailment_score:.2f}",
+            f"Neutral:{result.neutral_score:.2f}",
+            f"Contradicted:{result.contradiction_score:.2f}",
+        ]
         if result.source_title:
             parts.append(result.source_title)
         if result.page is not None:
@@ -181,118 +177,219 @@ class ChatService:
             parts.append(f"DocID:{result.doc_id}")
         if result.evidence_snippet:
             parts.append(f'Evidence:"{result.evidence_snippet}"')
-
         return f" *({'; '.join(parts)})*"
 
     @staticmethod
-    def _split_propositions(text: str) -> List[Tuple[str, str]]:
-        """Heuristically split a buffer into (proposition, trailing_separator) pairs.
-
-        Splits on standard sentence boundaries and major Indonesian conjunctions
-        to evaluate smaller facts independently. The trailing separator is the
-        whitespace that followed the proposition in the source text (e.g.
-        "\\n\\n" for a paragraph break), so callers can preserve the original
-        formatting instead of always rejoining with a single space.
-        """
-        # Sentence boundaries (., ?, !) and newlines, via the shared splitter
-        # (guards against markdown list markers like "1." being read as
-        # sentence ends, and reports the separator at each boundary).
-        sentence_pairs = split_sentences_with_seps(text)
-
-        propositions: List[Tuple[str, str]] = []
-        for part, sep in sentence_pairs:
-            # Further split on Indonesian conjunctions that introduce new
-            # claims, keeping the delimiter attached to the following part.
-            sub_parts = re.split(r'(?i)(,\s*yang\s+|,\s*dan\s+|,\s*karena\s+|,\s*sehingga\s+)', part)
-
-            subs = []
-            current_prop = ""
-            for sp in sub_parts:
-                if re.match(r'(?i)(,\s*yang\s+|,\s*dan\s+|,\s*karena\s+|,\s*sehingga\s+)', sp):
-                    # Delimiter: start a new proposition with it.
-                    if current_prop.strip():
-                        subs.append(current_prop.strip())
-                    current_prop = sp.lstrip(", ")  # drop leading comma
-                else:
-                    current_prop += sp
-
-            if current_prop.strip():
-                subs.append(current_prop.strip())
-
-            # Conjunction splits are always mid-line, so only the last
-            # sub-proposition of a sentence carries the sentence's real
-            # trailing separator (e.g. a paragraph break); earlier ones
-            # just get a plain space.
-            for i, sub in enumerate(subs):
-                propositions.append((sub, sep if i == len(subs) - 1 else " "))
-
-        return propositions
+    def _format_unverified() -> str:
+        """Badge for a factual-looking claim the LLM left uncited."""
+        return " *(Unverified)*"
 
     @staticmethod
-    def _is_table_row(prop_text: str) -> bool:
-        """True if a proposition is a single Markdown table line (starts/ends
-        with '|'). Keeps citation markers off row lines, which would corrupt
-        GFM table syntax. A bare-pipe sentence like "|x| = 5" false-positives,
-        acceptable in this domain.
-        """
-        return bool(_TABLE_ROW_RE.match(prop_text.strip()))
+    def _worst_result(results: List[Any]) -> Any:
+        """Collapse a sentence's per-clause NLI results into the one to show.
 
-    async def _assess_and_format(
+        A sentence is only as trustworthy as its weakest clause, so a
+        contradiction anywhere wins; otherwise the lowest entailment score
+        does. Mirrors ``RAMService._pick_best`` inverted — that picks the most
+        supporting evidence *for one claim*, this picks the least supported
+        *claim in one sentence*. Returns None when nothing was assessed.
+        """
+        assessed = [r for r in results if r is not None]
+        if not assessed:
+            return None
+        contradictions = [r for r in assessed if r.label == LABEL_CONTRADICTION]
+        if contradictions:
+            return max(contradictions, key=lambda r: r.contradiction_score)
+        return min(assessed, key=lambda r: r.entailment_score)
+
+    def _split_claims(self, buffer: str) -> Tuple[List[ClaimUnit], str]:
+        """Split ``buffer`` into complete claim units + an incomplete remainder.
+
+        Synchronous on purpose: the caller offloads it to a worker thread via
+        ``asyncio.to_thread`` so the Stanza dependency parser (CPU-bound,
+        50-200ms/sentence) never blocks the event loop.
+        """
+        return split_claims(buffer, self.clause_splitter)
+
+    @staticmethod
+    def _clamp_contexts(
+        contexts: List[RAMRetrievedContext],
+        max_tokens: int,
+    ) -> List[RAMRetrievedContext]:
+        """Truncate retrieved contexts to ``max_tokens`` (approximate), keeping
+        retrieval order (highest-ranked first). A non-positive budget disables
+        clamping. The same (clamped) list feeds the prompt and RAM's citation
+        lookup, so the ``[CIT:N]`` numbering stays consistent.
+        """
+        if max_tokens <= 0:
+            return contexts
+        kept: List[RAMRetrievedContext] = []
+        used = 0
+        for ctx in contexts:
+            cost = (
+                approx_token_count(ctx.text)
+                + approx_token_count(ctx.source_title or "")
+                + 4
+            )
+            if kept and used + cost > max_tokens:
+                break
+            kept.append(ctx)
+            used += cost
+        return kept
+
+    async def _assess_table(
         self,
-        text: str,
-        premise: str,
+        table_text: str,
         ram_contexts: List[RAMRetrievedContext],
         skip_ram: bool,
-    ) -> str:
-        """Run RAM assessment (unless baseline) and format a citation marker
-        (possibly ""). Shared by the prose and table-block paths.
-        """
-        if skip_ram:
-            return ""
-        result = await self.ram_service.assess_sentence(text, premise, ram_contexts)
-        return self._format_citation(result)
+    ) -> AsyncGenerator[str, None]:
+        """Assess a complete Markdown table and re-emit it with in-cell badges."""
+        table = parse_table_block(table_text)
+        if table is None:
+            clean, ids = extract_citations(table_text)
+            async for out in self._handle_claim(
+                ClaimUnit(text=clean, citation_ids=ids, kind="prose", separator="\n"),
+                ram_contexts=ram_contexts, skip_ram=skip_ram, table_rows=[],
+            ):
+                yield out
+            return
 
-    async def _handle_complete_proposition(
+        badges: Dict[Tuple[int, int], str] = {}
+        if not skip_ram:
+            for claim in table.claims:
+                result = await self.ram_service.assess_claim(
+                    claim.cell_text, ram_contexts, claim.citation_ids
+                )
+                badges[(claim.row_index, claim.col_index)] = self._format_citation(result)
+
+        header = extract_citations(table.header)[0].strip()
+        lines = [header, table.separator]
+        for row_index, line in enumerate(table.data_lines):
+            cells = [extract_citations(c)[0].strip() for c in split_cells(line)]
+            for col_index in range(len(cells)):
+                badge = badges.get((row_index, col_index), "")
+                if badge:
+                    cells[col_index] = cells[col_index] + badge
+            lines.append("| " + " | ".join(cells) + " |")
+        yield "\n".join(lines) + "\n\n"
+
+    async def _handle_claim(
         self,
-        prop_text: str,
-        sep: str,
+        unit: ClaimUnit,
         *,
         ram_contexts: List[RAMRetrievedContext],
-        premise: str,
         skip_ram: bool,
         table_rows: List[Tuple[str, str]],
+        pending_clauses: Optional[List[Any]] = None,
     ) -> AsyncGenerator[str, None]:
-        """Process one complete (proposition, sep) pair, yielding output chunks
-        in stream order.
+        """Process one complete claim unit, yielding output chunks in stream order.
 
-        Table rows are accumulated in the caller-owned ``table_rows`` list
-        rather than assessed individually — a lone row has no headers, and a
-        marker on a row line would corrupt GFM syntax. When a non-row
-        proposition ends the block, the rows are assessed as one unit and the
-        citation is emitted as its own paragraph.
+        Table rows are buffered (not emitted) until the block ends, because the
+        in-cell badges can only be rendered once the whole table is parsed.
+
+        ``pending_clauses`` accumulates the NLI results of the non-final
+        clauses of a multi-clause sentence (see ``ClaimUnit.is_sentence_end``).
+        Every clause is still assessed individually, but the badge is held back
+        until the sentence ends and then reflects the weakest clause — a badge
+        in the middle of a sentence reads as a stray "." to the user.
         """
-        if self._is_table_row(prop_text):
-            table_rows.append((prop_text, sep))
-            yield prop_text + sep
+        if pending_clauses is None:
+            pending_clauses = []
+
+        if unit.kind == "table_row":
+            table_rows.append((unit.text, unit.separator))
             return
 
         if table_rows:
             table_text = "\n".join(row for row, _ in table_rows)
             table_rows.clear()
-            citation = await self._assess_and_format(table_text, premise, ram_contexts, skip_ram)
-            if citation:
-                yield "\n" + citation.strip() + "\n\n"
+            # A table can only start at a sentence boundary, so any clause
+            # results still pending belong to a sentence that never completed.
+            pending_clauses.clear()
+            async for out in self._assess_table(table_text, ram_contexts, skip_ram):
+                yield out
 
-        if not prop_text.endswith((".", "?", "!")):
-            prop_text += "."
+        text = unit.text.strip()
+        sep = unit.separator
+        if unit.kind not in ("prose", "list_item") or not text:
+            pending_clauses.clear()
+            yield text + sep
+            return
 
-        if len(prop_text) > MIN_ASSESSABLE_LENGTH:
-            citation = await self._assess_and_format(prop_text, premise, ram_contexts, skip_ram)
-            prop_text += citation
+        if unit.is_sentence_end and not text.endswith((".", "?", "!")):
+            text += "."
 
-        yield prop_text + sep
+        if skip_ram:
+            yield text + sep
+            return
+
+        result = None
+        if unit.citation_ids:
+            result = await self.ram_service.assess_claim(text, ram_contexts, unit.citation_ids)
+
+        # Mid-sentence clause: keep its verdict, emit the text bare.
+        if not unit.is_sentence_end:
+            pending_clauses.append((text, result))
+            yield text + sep
+            return
+
+        sentence = pending_clauses + [(text, result)]
+        pending_clauses.clear()
+        results = [r for _, r in sentence]
+
+        if any(r is not None for r in results):
+            badge = self._format_citation(self._worst_result(results))
+        else:
+            # Uncited: judge "worth flagging" on the whole sentence, not just
+            # its trailing clause. A refusal or a piece of advice has no citable
+            # source by construction, so flagging it would put a warning on an
+            # honest "I don't have that" — see is_unciteable_statement.
+            sentence_text = " ".join(t for t, _ in sentence)
+            length = sum(len(t) for t, _ in sentence)
+            worth_flagging = (
+                length > MIN_ASSESSABLE_LENGTH
+                and not is_unciteable_statement(sentence_text)
+            )
+            badge = self._format_unverified() if worth_flagging else ""
+
+        yield text + badge + sep
 
     async def process_chat_message(
+        self,
+        session_id: str,
+        message_text: str,
+        **kwargs: Any,
+    ) -> AsyncGenerator[str, None]:
+        """Run one chat turn, accounting for what it cost.
+
+        A thin wrapper over :meth:`_process_chat_message` that installs a
+        turn-scoped usage collector. The turn fans out into LLM calls owned by
+        three different objects — HyDE inside ``SearchService``, the condenser,
+        and generation here — so collecting by async context attributes them
+        together without threading a callback through every signature.
+
+        Emits one ``chat.turn.cost`` event per turn, which is what makes spend
+        answerable in production ("what does a turn actually cost?") rather than
+        only inside a benchmark.
+        """
+        with collect_usage() as usage:
+            async for event in self._process_chat_message(
+                session_id, message_text, **kwargs
+            ):
+                yield event
+
+        if usage.call_count:
+            logger.info(
+                "chat.turn.cost",
+                session_id=session_id,
+                llm_calls=usage.call_count,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                cached_prompt_tokens=usage.cached_prompt_tokens,
+                cost_usd=usage.cost_usd,
+            )
+
+    async def _process_chat_message(
         self,
         session_id: str,
         message_text: str,
@@ -390,8 +487,13 @@ class ChatService:
 
             # 3. Relevance pre-check (IVM + KB). No session_id is passed: the
             # chat session ID is unrelated to the KB chunk session_id payload,
-            # and filtering on it would return zero results.
-            precheck_contexts = await self.search_service.search(search_query_text, top_k=3)
+            # and filtering on it would return zero results. HyDE is skipped
+            # here (``use_expansion=False``): the gate reads retrieval scores,
+            # not the chunks, so it does not justify an LLM round-trip per
+            # passage — the deep fetch below still expands.
+            precheck_contexts = await self.search_service.search(
+                search_query_text, top_k=3, use_expansion=False, hydrate=False
+            )
             if not skip_ivm:
                 if not precheck_contexts:
                     raise IrrelevantQueryException("No relevant contexts found in the knowledge base.")
@@ -400,10 +502,16 @@ class ChatService:
                 context_scores = [ctx.score for ctx in precheck_contexts]
                 await self.relevance_service.check_relevance(search_query_text, context_chunks, context_scores)
 
-            # 4. Deep Context Retrieval (KB)
+            # 4. Deep Context Retrieval (KB). Chunk-level contexts are kept for
+            # RAM's per-sentence evidence lookup; document-level aggregation
+            # feeds the LLM prompt and the emitted "view RAG context" panel.
             full_contexts = await self.search_service.search(search_query_text, top_k=15)
-            
-            # Map KB contexts to RAM contexts (preserve breadcrumbs + hierarchy)
+            documents = await self.search_service.aggregate_documents(full_contexts)
+
+            # Chunk-level contexts for both the LLM prompt (numbered Sumber N →
+            # [CIT:N]) and RAM's citation-local evidence lookup. Preserve
+            # breadcrumbs/hierarchy and the matching child text.
+            doc_map = {doc.doc_id: doc for doc in documents}
             ram_contexts = [
                 RAMRetrievedContext(
                     text=ctx.text,
@@ -414,9 +522,21 @@ class ChatService:
                     chunk_id=ctx.chunk_id,
                     path=ctx.path,
                     doc_id=ctx.doc_id,
+                    child_text=ctx.child_text or "",
+                    parent_chunk_id=ctx.parent_chunk_id,
+                    released_date=(
+                        doc_map[ctx.doc_id].released_date.isoformat()
+                        if ctx.doc_id in doc_map and doc_map[ctx.doc_id].released_date
+                        else None
+                    ),
                 )
                 for ctx in full_contexts
             ]
+
+            # Clamp the retrieved context to the token budget BEFORE building
+            # the prompt and before RAM's citation lookup, so the [CIT:N]
+            # numbering the model sees matches the evidence RAM verifies.
+            ram_contexts = self._clamp_contexts(ram_contexts, self.context_max_tokens)
 
             # 5. Prompt build: Indonesian system/context prompt plus a random
             # per-request delimiter wrapping the raw user message (injection
@@ -431,38 +551,39 @@ class ChatService:
             messages.extend(history)
             messages.append({"role": "user", "content": bundle.user_turn})
 
-            premise = self.ram_service.build_premise(ram_contexts)
-
             # Emit the retrieved context as one NDJSON event before streaming,
             # for the frontend's collapsible "view RAG context" panel and for
             # downstream consumers; the same payload is persisted with the
             # assistant message so it survives a refresh.
             #
-            # "content" is a flat join of chunk texts and MUST keep this shape
-            # (build_subset_d.py reads it verbatim as RAM ground truth);
-            # "chunks" is the per-source structure the chat UI renders.
+            # "content" is a flat join of document texts; "chunks" is now the
+            # document-level structure the chat UI renders (one object per
+            # unique source document).
             context_payload = {
-                "content": "\n\n".join(ctx.text for ctx in ram_contexts),
+                "content": "\n\n".join(doc.content for doc in documents),
                 "chunks": [
                     {
-                        "title": ctx.source_title,
-                        "page": ctx.page,
-                        "breadcrumbs": ctx.breadcrumbs,
-                        "text": ctx.text,
+                        "doc_id": doc.doc_id,
+                        "title": doc.title,
+                        "released_date": doc.released_date.isoformat() if doc.released_date else None,
+                        "content": doc.content,
                     }
-                    for ctx in ram_contexts
+                    for doc in documents
                 ],
             }
             yield json.dumps({"type": "context", **context_payload}) + "\n"
 
-            # Buffer the stream by sentence to assess each complete proposition.
+            # Buffer the stream by claim unit; assess each complete unit.
             buffer = ""
+            raw_output = ""
             final_output = ""
-            # Accumulates contiguous table-row propositions until a non-row
-            # proposition ends the block (see _handle_complete_proposition).
-            # Local to this call — never instance state, since ChatService may
-            # be reused across concurrent requests.
+            # Accumulates contiguous table-row units until a non-row unit ends
+            # the block (see _handle_claim). Local to this call — never
+            # instance state, since ChatService may be reused across requests.
             table_rows: List[Tuple[str, str]] = []
+            # Per-clause NLI results of the sentence currently being emitted,
+            # held until its final clause carries the badge (see _handle_claim).
+            pending_clauses: List[Any] = []
 
             # 6. Stream and Assess
             stream = self.llm_conn.stream_chat(
@@ -473,48 +594,54 @@ class ChatService:
             )
 
             async for chunk in stream:
+                raw_output += chunk
                 buffer += chunk
-                # On a likely proposition boundary, flush all but the trailing
-                # incomplete fragment.
-                if any(punct in chunk for punct in [". ", "? ", "! ", "\n", ", yang ", ", dan ", ", karena ", ", sehingga "]):
-                    propositions = self._split_propositions(buffer)
-                    if len(propositions) > 1:
-                        for prop, sep in propositions[:-1]:
-                            async for out in self._handle_complete_proposition(
-                                prop, sep, ram_contexts=ram_contexts, premise=premise,
-                                skip_ram=skip_ram, table_rows=table_rows,
-                            ):
-                                final_output += out
-                                yield json.dumps({"type": "chunk", "content": out}) + "\n"
-
-                        buffer = propositions[-1][0]
-
-            # Flush any remaining buffer through the same row/prose dispatch.
-            if buffer.strip():
-                for prop, sep in self._split_propositions(buffer.strip()):
-                    async for out in self._handle_complete_proposition(
-                        prop, sep, ram_contexts=ram_contexts, premise=premise,
+                units, remainder = await asyncio.to_thread(self._split_claims, buffer)
+                for unit in units:
+                    async for out in self._handle_claim(
+                        unit, ram_contexts=ram_contexts,
                         skip_ram=skip_ram, table_rows=table_rows,
+                        pending_clauses=pending_clauses,
+                    ):
+                        final_output += out
+                        yield json.dumps({"type": "chunk", "content": out}) + "\n"
+                buffer = remainder
+
+            # Flush any remaining buffer through the same dispatch.
+            if buffer.strip():
+                units, remainder = await asyncio.to_thread(self._split_claims, buffer)
+                for unit in units:
+                    async for out in self._handle_claim(
+                        unit, ram_contexts=ram_contexts,
+                        skip_ram=skip_ram, table_rows=table_rows,
+                        pending_clauses=pending_clauses,
+                    ):
+                        final_output += out
+                        yield json.dumps({"type": "chunk", "content": out}) + "\n"
+                if remainder.strip():
+                    clean, ids = extract_citations(remainder)
+                    async for out in self._handle_claim(
+                        ClaimUnit(text=clean, citation_ids=ids, kind="prose", separator=""),
+                        ram_contexts=ram_contexts, skip_ram=skip_ram, table_rows=table_rows,
+                        pending_clauses=pending_clauses,
                     ):
                         final_output += out
                         yield json.dumps({"type": "chunk", "content": out}) + "\n"
 
             # If the answer ended inside a table (last content was rows, so no
-            # trailing prose proposition triggered the flush), assess and flush
-            # the accumulated block now.
+            # trailing non-row unit triggered the flush), assess and flush the
+            # accumulated block now.
             if table_rows:
                 table_text = "\n".join(row for row, _ in table_rows)
                 table_rows.clear()
-                citation = await self._assess_and_format(table_text, premise, ram_contexts, skip_ram)
-                if citation:
-                    out = "\n" + citation.strip() + "\n\n"
+                async for out in self._assess_table(table_text, ram_contexts, skip_ram):
                     final_output += out
                     yield json.dumps({"type": "chunk", "content": out}) + "\n"
 
             # Persist the assistant message with its RAG context/sources so the
             # frontend can restore the "view RAG context" panel after a refresh.
             await self.chat_repo.create_message(
-                session_id, "assistant", final_output, raw_content=final_output,
+                session_id, "assistant", final_output, raw_content=raw_output,
                 context=context_payload["content"], sources=context_payload["chunks"],
             )
             # Commit before signalling "done": the client may start the next

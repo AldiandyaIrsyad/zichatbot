@@ -194,6 +194,17 @@ class QdrantStore(IVectorStore):
             points=Filter(must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))])
         )
 
+    async def update_payloads(self, doc_ids: List[str], payload: dict[str, Any]) -> None:
+        """Merge ``payload`` fields into every point whose ``doc_id`` is in
+        ``doc_ids`` — a single Qdrant call for a bulk toggle."""
+        if not doc_ids:
+            return
+        await self._client.set_payload(
+            collection_name=self.collection_name,
+            payload=payload,
+            points=Filter(must=[FieldCondition(key="doc_id", match=models.MatchAny(any=list(doc_ids)))])
+        )
+
     async def delete_by_doc_id(self, doc_id: str) -> None:
         """Delete all points for a document, e.g. when it's removed from the
         KB. A 404 (collection/points already gone) is swallowed since the
@@ -203,6 +214,21 @@ class QdrantStore(IVectorStore):
             await self._client.delete(
                 collection_name=self.collection_name,
                 points_selector=Filter(must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))])
+            )
+        except UnexpectedResponse as exc:
+            if exc.status_code != 404:
+                raise
+
+    async def delete_by_doc_ids(self, doc_ids: List[str]) -> None:
+        """Delete all points for the given ``doc_ids`` in a single Qdrant call.
+        A 404 is swallowed (end state — no vectors for these ids — is what the
+        caller wants); any other error is re-raised."""
+        if not doc_ids:
+            return
+        try:
+            await self._client.delete(
+                collection_name=self.collection_name,
+                points_selector=Filter(must=[FieldCondition(key="doc_id", match=models.MatchAny(any=list(doc_ids)))])
             )
         except UnexpectedResponse as exc:
             if exc.status_code != 404:

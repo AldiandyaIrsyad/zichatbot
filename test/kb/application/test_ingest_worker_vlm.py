@@ -211,12 +211,17 @@ class TestVLMEnrichmentStep:
         mock_vector_store: AsyncMock,
         mock_kb_repo: AsyncMock,
     ) -> None:
-        """When VLM enrichment fails, the element should be kept (fail-closed).
+        """A VLM failure must abort the document under the default strict mode.
 
-        The lone Image element on page 1 classifies as a VISUAL page, so
-        this exercises `_process_visual_page`'s fail-closed VLM-exception
-        path. `_extract_page_image` is stubbed so the failure genuinely
-        comes from the VLM call, not from PyMuPDF failing on a fake path.
+        Ingestion is write-once, so a swallowed VLM error bakes un-transcribed
+        OCR into the index — that is how 21 documents completed with pages
+        missing to 413 errors. With ``vlm_strict=False`` the old lenient
+        behaviour still applies, and that half is asserted below.
+
+        The lone Image element on page 1 classifies as a VISUAL page, so this
+        exercises `_process_visual_page`'s VLM-exception path.
+        `_extract_page_image` is stubbed so the failure genuinely comes from the
+        VLM call, not from PyMuPDF failing on a fake path.
         """
         mock_vlm = AsyncMock()
         mock_vlm.describe_image = AsyncMock(side_effect=Exception("VLM API error"))
@@ -244,15 +249,21 @@ class TestVLMEnrichmentStep:
             ),
         ]
 
+        # Strict (the default): the failure propagates and the document fails.
         with patch.object(worker, "_extract_page_image", return_value="/tmp/page1.png"):
-            result = await worker._route_and_enrich_elements(elements, "/fake/path.pdf", "doc-1")
+            with pytest.raises(Exception, match="VLM API error"):
+                await worker._route_and_enrich_elements(elements, "/fake/path.pdf", "doc-1")
 
-        # VLM was called (page-level extraction prompt) but failed — the
-        # page's figure content is dropped (fail-closed), the page-less
-        # narrative text (grouped under page_key=None) survives untouched.
         mock_vlm.describe_image.assert_called_once_with(
             "/tmp/page1.png", prompt=VLM_PAGE_EXTRACTION_PROMPT
         )
+
+        # Lenient: opt out explicitly and the page's figure content is dropped
+        # while the page-less narrative (page_key=None) survives untouched.
+        worker.vlm_strict = False
+        mock_vlm.describe_image.reset_mock()
+        with patch.object(worker, "_extract_page_image", return_value="/tmp/page1.png"):
+            result = await worker._route_and_enrich_elements(elements, "/fake/path.pdf", "doc-1")
         assert len(result) == 1
         assert result[0].text == "Narrative."
 
@@ -370,8 +381,11 @@ class TestVisualPageRouting:
         mock_vector_store: AsyncMock,
         mock_kb_repo: AsyncMock,
     ) -> None:
-        """If VLM extraction fails on a VISUAL page, the Title still
-        survives but no figure chunk is produced."""
+        """A VISUAL-page VLM failure aborts under strict; under lenient the
+        Title survives and no figure chunk is produced.
+
+        Strict is the default because a VISUAL page has no usable native text —
+        dropping its figure means the page contributes nothing to the index."""
         mock_vlm = AsyncMock()
         mock_vlm.describe_image = AsyncMock(side_effect=Exception("VLM API error"))
         mock_vlm.set_pdf_path = MagicMock()
@@ -395,6 +409,11 @@ class TestVisualPageRouting:
             ],
         ]
 
+        with patch.object(worker, "_extract_page_image", return_value="/tmp/page3.png"):
+            with pytest.raises(Exception, match="VLM API error"):
+                await worker._route_and_enrich_elements(elements, "/fake/path.pdf", "doc-1")
+
+        worker.vlm_strict = False
         with patch.object(worker, "_extract_page_image", return_value="/tmp/page3.png"):
             result = await worker._route_and_enrich_elements(elements, "/fake/path.pdf", "doc-1")
 

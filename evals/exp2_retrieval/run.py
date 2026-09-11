@@ -62,13 +62,9 @@ async def retrieve(
     makes HyDE the single varied factor; ``hyde=False`` there reproduces
     ``/api/kb/search``.
 
-    ``/api/kb/search`` returns CHUNK-level hits, each carrying the doc_id it
-    came from — several of the top-k chunks routinely belong to the same
-    document (measured: top-5 averages only ~3.8 unique documents across all
-    three modes). This function returns the raw chunk-level list; callers
-    computing Hit Rate@k/MRR@k should deduplicate first (see dedup_doc_ids) so
-    "@k" means "top-k distinct documents", not "top-k chunks that may repeat
-    the same 2-3 documents".
+    ``/api/kb/search`` now returns DOCUMENT-level hits — one object per unique
+    source document — each carrying the ``doc_id`` it came from. ``dedup_doc_ids``
+    is therefore a no-op safety net rather than a required normalization step.
 
     Args:
         rerank: Whether the cross-encoder reranker runs. With it on, all three
@@ -77,7 +73,7 @@ async def retrieve(
             themselves.
 
     Returns:
-        List of retrieved doc_ids in ranked (chunk-level) order.
+        List of retrieved doc_ids in ranked (document-level) order.
     """
     params: Dict[str, Any] = {"q": query, "top_k": top_k, "mode": mode, "rerank": str(rerank).lower()}
     if hyde is None:
@@ -102,11 +98,11 @@ async def retrieve(
 
 
 def dedup_doc_ids(doc_ids: List[str]) -> List[str]:
-    """Collapse a chunk-level doc_id list to unique documents, rank-preserved.
+    """Collapse a doc_id list to unique documents, rank-preserved.
 
-    Keeps the first (best-ranked) occurrence of each doc_id and drops
-    later repeats, so a document's rank in the deduped list is the best
-    rank any of its chunks achieved.
+    The endpoint already returns one hit per document, so this is a safety
+    no-op. Kept so callers can still normalise in case the API changes back to
+    chunk-level output.
 
     Returns:
         Unique doc_ids in first-occurrence (best-rank) order.

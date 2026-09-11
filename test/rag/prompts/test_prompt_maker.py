@@ -32,31 +32,59 @@ class TestBuildContextBlock:
     def test_empty_contexts_returns_empty_string(self) -> None:
         assert build_context_block([]) == ""
 
-    def test_includes_breadcrumbs_when_present(self) -> None:
-        ctx = _make_context(text="Isi pasal.", breadcrumbs=["BAB I", "Pasal 5"])
+    def test_includes_source_title_when_present(self) -> None:
+        ctx = _make_context(text="Isi pasal.")
         block = build_context_block([ctx])
-        assert "BAB I > Pasal 5" in block
+        assert "Doc" in block
         assert "Isi pasal." in block
+
+    def test_omits_breadcrumbs_from_header(self) -> None:
+        # The section path is appended to ctx.text by the search service, so
+        # the JSON object must not repeat it as a separate header field.
+        ctx = _make_context(text="BAB I > Pasal 5\n\nIsi pasal.", breadcrumbs=["BAB I", "Pasal 5"])
+        block = build_context_block([ctx])
+        assert "Isi pasal." in block
+        # breadcrumbs are inside konten, not a dedicated JSON field
+        assert '"breadcrumbs"' not in block
 
     def test_numbers_multiple_contexts(self) -> None:
         block = build_context_block([_make_context("A"), _make_context("B")])
-        assert "Sumber 1" in block
-        assert "Sumber 2" in block
+        assert '"sumber": 1' in block
+        assert '"sumber": 2' in block
 
-    def test_omits_breadcrumb_brackets_when_absent(self) -> None:
+    def test_header_has_title_without_breadcrumbs(self) -> None:
         block = build_context_block([_make_context("A", breadcrumbs=[])])
-        assert block == "[Sumber 1]\nA"
+        assert block == '[{"sumber": 1, "judul": "Doc", "konten": "A"}]'
 
     def test_includes_page_when_present(self) -> None:
         ctx = _make_context("Isi pasal.", page=12)
         block = build_context_block([ctx])
-        assert "Halaman 12" in block
+        assert '"halaman": 12' in block
         assert "Isi pasal." in block
 
     def test_pairs_page_and_content_in_one_block(self) -> None:
-        ctx = _make_context("Isi pasal.", breadcrumbs=["BAB I"], page=12)
+        ctx = _make_context("Isi pasal.", page=12)
         block = build_context_block([ctx])
-        assert block == "[Sumber 1, Halaman 12, BAB I]\nIsi pasal."
+        assert block == '[{"sumber": 1, "judul": "Doc", "halaman": 12, "konten": "Isi pasal."}]'
+
+    def test_includes_release_date_when_present(self) -> None:
+        ctx = _make_context("Isi pasal.")
+        ctx = RetrievedContext(
+            text="Isi pasal.", source_title="Doc", released_date="2026-07-15", page=12
+        )
+        block = build_context_block([ctx])
+        assert '"tanggal": "2026-07-15"' in block
+
+    def test_valid_json_array(self) -> None:
+        import json
+
+        block = build_context_block([_make_context("A"), _make_context("B")])
+        parsed = json.loads(block)
+        assert isinstance(parsed, list)
+        assert parsed[0]["sumber"] == 1
+        assert parsed[1]["sumber"] == 2
+        assert parsed[0]["judul"] == "Doc"
+        assert parsed[0]["konten"] == "A"
 
 
 class TestBuildUserTurn:

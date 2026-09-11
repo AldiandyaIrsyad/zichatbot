@@ -54,6 +54,7 @@ endblock %} {% block layout %} {% include "components/sidebar.html" %}
                   <th class="text-left px-3 py-2 font-medium">Filename</th>
                   <th class="text-left px-3 py-2 font-medium">Title</th>
                   <th class="text-left px-3 py-2 font-medium">Description</th>
+                  <th class="text-left px-3 py-2 font-medium">Released date</th>
                   <th class="text-center px-3 py-2 font-medium w-12"></th>
                 </tr>
               </thead>
@@ -78,6 +79,13 @@ endblock %} {% block layout %} {% include "components/sidebar.html" %}
                         x-model="item.description"
                         class="w-full bg-white dark:bg-darkinput border border-slate-300 dark:border-darkborder rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-brand dark:text-white"
                         placeholder="Optional"
+                      />
+                    </td>
+                    <td class="px-3 py-2">
+                      <input
+                        type="date"
+                        x-model="item.releasedDate"
+                        class="w-full bg-white dark:bg-darkinput border border-slate-300 dark:border-darkborder rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-brand dark:text-white"
                       />
                     </td>
                     <td class="px-3 py-2 text-center">
@@ -118,38 +126,85 @@ endblock %} {% block layout %} {% include "components/sidebar.html" %}
 
     <!-- PDF List Section -->
     <section>
-      <h2 class="text-xl font-semibold mb-4 text-slate-900 dark:text-white">
-        Uploaded Documents
-      </h2>
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-semibold text-slate-900 dark:text-white">Uploaded Documents</h2>
+        <span class="text-sm text-slate-500 dark:text-gray-400" x-text="total + ' document' + (total === 1 ? '' : 's')"></span>
+      </div>
+
+      <!-- Toolbar -->
+      <div class="flex flex-wrap items-center gap-2 mb-3">
+        <input
+          type="search"
+          x-model="search"
+          @input.debounce.400ms="applyFilters()"
+          placeholder="Search title / description…"
+          class="flex-1 min-w-[180px] bg-white dark:bg-darkinput border border-slate-300 dark:border-darkborder rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-brand dark:text-white"
+        />
+        <select
+          x-model="activeFilter"
+          @change="applyFilters()"
+          class="bg-white dark:bg-darkinput border border-slate-300 dark:border-darkborder rounded px-2 py-1.5 text-sm dark:text-white"
+        >
+          <option value="">All statuses</option>
+          <option value="true">Active</option>
+          <option value="false">Inactive</option>
+        </select>
+        <label class="flex items-center gap-1 text-xs text-slate-500 dark:text-gray-400">
+          From
+          <input type="date" x-model="releasedFrom" @change="applyFilters()"
+            class="bg-white dark:bg-darkinput border border-slate-300 dark:border-darkborder rounded px-2 py-1 text-sm dark:text-white" />
+        </label>
+        <label class="flex items-center gap-1 text-xs text-slate-500 dark:text-gray-400">
+          To
+          <input type="date" x-model="releasedTo" @change="applyFilters()"
+            class="bg-white dark:bg-darkinput border border-slate-300 dark:border-darkborder rounded px-2 py-1 text-sm dark:text-white" />
+        </label>
+        <button @click="clearFilters()" class="text-xs text-slate-500 hover:text-slate-700 dark:text-gray-400">Clear</button>
+      </div>
+
+      <!-- Bulk actions -->
+      <div class="flex flex-wrap items-center gap-2 mb-3" x-show="selected.length > 0">
+        <span class="text-sm text-slate-600 dark:text-gray-300" x-text="selected.length + ' selected'"></span>
+        <button @click="bulkSetStatus(true)"
+          class="text-xs font-medium px-3 py-1.5 rounded bg-brand text-white hover:bg-blue-700 transition-colors">Activate</button>
+        <button @click="bulkSetStatus(false)"
+          class="text-xs font-medium px-3 py-1.5 rounded bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-200 hover:bg-slate-300 dark:hover:bg-gray-600 transition-colors">Deactivate</button>
+        <button @click="bulkDelete()"
+          class="text-xs font-medium px-3 py-1.5 rounded bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors">Delete</button>
+      </div>
+
+      <!-- Select all -->
+      <label class="flex items-center gap-2 mb-2 text-sm text-slate-600 dark:text-gray-300">
+        <input type="checkbox" :checked="allSelected" @change="toggleSelectAll()" class="rounded" />
+        Select all on this page
+      </label>
+
       <div class="space-y-3">
-        <!-- Currently disabled because it will push layout around. -->
-        <!-- <template x-if="loading">
-          <div class="text-slate-500 dark:text-gray-400 text-sm italic">Loading documents...</div>
-        </template> -->
+        <template x-if="loading">
+          <div class="text-slate-500 dark:text-gray-400 text-sm italic">Loading documents…</div>
+        </template>
 
         <template x-if="!loading && pdfs.length === 0">
-          <div class="text-slate-500 dark:text-gray-400 text-sm italic">
-            No documents uploaded yet.
-          </div>
+          <div class="text-slate-500 dark:text-gray-400 text-sm italic">No documents found.</div>
         </template>
 
         <template x-for="pdf in pdfs" :key="pdf.id">
           <div
             class="bg-white dark:bg-darksidebar p-4 rounded-xl border border-slate-200 dark:border-darkborder flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between"
           >
+            <div class="flex items-start">
+              <input type="checkbox" :checked="selected.includes(pdf.id)" @change="toggleSelect(pdf.id)"
+                class="mt-1 mr-3 rounded" />
+            </div>
+
             <div class="flex-1">
-              <h3
-                class="font-medium text-slate-900 dark:text-white"
-                x-text="pdf.title"
-              ></h3>
-              <p
-                class="text-sm text-slate-500 dark:text-gray-400 mt-1"
-                x-text="pdf.description || 'No description provided.'"
-              ></p>
+              <h3 class="font-medium text-slate-900 dark:text-white" x-text="pdf.title"></h3>
+              <p class="text-sm text-slate-500 dark:text-gray-400 mt-1" x-text="pdf.description || 'No description provided.'"></p>
+              <p class="text-xs text-slate-400 dark:text-gray-500 mt-1" x-show="pdf.released_date"
+                x-text="'Released: ' + pdf.released_date"></p>
             </div>
 
             <div class="flex items-center gap-3 w-full sm:w-auto mt-3 sm:mt-0">
-              <!-- Ingestion Status Badge -->
               <template x-if="pdf.ingestion_status !== 'completed'">
                 <span
                   class="px-2.5 py-1 text-xs font-medium rounded-full"
@@ -158,45 +213,41 @@ endblock %} {% block layout %} {% include "components/sidebar.html" %}
                         'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400': pdf.ingestion_status === 'failed'
                       }"
                   x-text="pdf.ingestion_status.charAt(0).toUpperCase() + pdf.ingestion_status.slice(1)"
-                >
-                </span>
+                ></span>
               </template>
 
-              <!-- Toggle Switch -->
               <template x-if="pdf.ingestion_status === 'completed'">
-                <label
-                  class="flex items-center cursor-pointer gap-2 text-sm text-slate-700 dark:text-gray-300"
-                >
+                <label class="flex items-center cursor-pointer gap-2 text-sm text-slate-700 dark:text-gray-300">
                   <span>Active</span>
                   <div class="relative">
-                    <input
-                      type="checkbox"
-                      class="sr-only"
-                      :checked="pdf.active"
-                      @change="toggleStatus(pdf.id, $event.target.checked)"
-                    />
-                    <div
-                      class="block w-10 h-6 rounded-full transition-colors"
-                      :class="pdf.active ? 'bg-brand' : 'bg-slate-200 dark:bg-gray-700'"
-                    ></div>
-                    <div
-                      class="dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform"
-                      :class="pdf.active ? 'transform translate-x-4' : ''"
-                    ></div>
+                    <input type="checkbox" class="sr-only" :checked="pdf.active"
+                      @change="toggleStatus(pdf.id, $event.target.checked)" />
+                    <div class="block w-10 h-6 rounded-full transition-colors"
+                      :class="pdf.active ? 'bg-brand' : 'bg-slate-200 dark:bg-gray-700'"></div>
+                    <div class="dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform"
+                      :class="pdf.active ? 'transform translate-x-4' : ''"></div>
                   </div>
                 </label>
               </template>
 
-              <!-- Delete button -->
-              <button
-                @click="deletePDF(pdf.id)"
-                class="text-red-500 hover:text-red-700 text-sm font-medium px-3 py-1.5 rounded bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
-              >
+              <button @click="deletePDF(pdf.id)"
+                class="text-red-500 hover:text-red-700 text-sm font-medium px-3 py-1.5 rounded bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors">
                 Delete
               </button>
             </div>
           </div>
         </template>
+      </div>
+
+      <!-- Pagination -->
+      <div class="flex items-center justify-between mt-4">
+        <span class="text-sm text-slate-500 dark:text-gray-400" x-text="'Page ' + page + ' of ' + (pages || 1)"></span>
+        <div class="flex gap-2">
+          <button @click="changePage(page - 1)" :disabled="page <= 1"
+            class="px-3 py-1.5 text-sm rounded border border-slate-300 dark:border-darkborder text-slate-600 dark:text-gray-300 disabled:opacity-40">Prev</button>
+          <button @click="changePage(page + 1)" :disabled="page >= pages"
+            class="px-3 py-1.5 text-sm rounded border border-slate-300 dark:border-darkborder text-slate-600 dark:text-gray-300 disabled:opacity-40">Next</button>
+        </div>
       </div>
     </section>
   </div>
@@ -206,7 +257,16 @@ endblock %} {% block layout %} {% include "components/sidebar.html" %}
   function adminDashboard() {
     return {
       pdfs: [],
+      total: 0,
+      page: 1,
+      pageSize: 20,
+      pages: 1,
       loading: true,
+      search: "",
+      activeFilter: "",
+      releasedFrom: "",
+      releasedTo: "",
+      selected: [],
       batchFiles: [],
       uploading: false,
       uploadStatus: { show: false, message: "", isError: false },
@@ -220,7 +280,7 @@ endblock %} {% block layout %} {% include "components/sidebar.html" %}
         for (const file of selected) {
           // Default title = filename without extension
           const baseName = file.name.replace(/\.pdf$/i, "");
-          this.batchFiles.push({ file, title: baseName, description: "" });
+          this.batchFiles.push({ file, title: baseName, description: "", releasedDate: "" });
         }
         // Reset the input so selecting the same file again still triggers change
         event.target.value = "";
@@ -233,9 +293,24 @@ endblock %} {% block layout %} {% include "components/sidebar.html" %}
       async loadPDFs() {
         this.loading = true;
         try {
-          const res = await fetch("/api/admin/pdfs");
+          const params = new URLSearchParams();
+          if (this.search.trim()) params.set("search", this.search.trim());
+          if (this.activeFilter !== "") params.set("active", this.activeFilter);
+          if (this.releasedFrom) params.set("released_from", this.releasedFrom);
+          if (this.releasedTo) params.set("released_to", this.releasedTo);
+          params.set("page", this.page);
+          params.set("page_size", this.pageSize);
+
+          const res = await fetch(`/api/admin/pdfs/search?${params}`);
           if (res.ok) {
-            this.pdfs = await res.json();
+            const data = await res.json();
+            this.pdfs = data.items || [];
+            this.total = data.total || 0;
+            this.pages = data.pages || 1;
+            if (this.page > this.pages && this.pages > 0) {
+              this.page = this.pages;
+              return this.loadPDFs();
+            }
           } else {
             console.error("Failed to load PDFs", await res.text());
           }
@@ -243,6 +318,78 @@ endblock %} {% block layout %} {% include "components/sidebar.html" %}
           console.error("Failed to load PDFs", e);
         } finally {
           this.loading = false;
+        }
+      },
+
+      applyFilters() {
+        this.page = 1;
+        this.loadPDFs();
+      },
+
+      clearFilters() {
+        this.search = "";
+        this.activeFilter = "";
+        this.releasedFrom = "";
+        this.releasedTo = "";
+        this.page = 1;
+        this.loadPDFs();
+      },
+
+      changePage(p) {
+        if (p < 1 || p > this.pages) return;
+        this.page = p;
+        this.loadPDFs();
+      },
+
+      toggleSelect(id) {
+        const i = this.selected.indexOf(id);
+        if (i >= 0) this.selected.splice(i, 1);
+        else this.selected.push(id);
+      },
+
+      get allSelected() {
+        return this.pdfs.length > 0 && this.pdfs.every((p) => this.selected.includes(p.id));
+      },
+
+      toggleSelectAll() {
+        if (this.allSelected) {
+          const ids = this.pdfs.map((p) => p.id);
+          this.selected = this.selected.filter((id) => !ids.includes(id));
+        } else {
+          this.selected = [...new Set([...this.selected, ...this.pdfs.map((p) => p.id)])];
+        }
+      },
+
+      async bulkSetStatus(active) {
+        if (!this.selected.length) return;
+        try {
+          const res = await fetch("/api/admin/pdfs/bulk/status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: this.selected, active }),
+          });
+          if (!res.ok) alert("Bulk status update failed");
+          this.selected = [];
+          await this.loadPDFs();
+        } catch (e) {
+          console.error(e);
+        }
+      },
+
+      async bulkDelete() {
+        if (!this.selected.length) return;
+        if (!confirm(`Delete ${this.selected.length} document(s)? This cannot be undone.`)) return;
+        try {
+          const res = await fetch("/api/admin/pdfs/bulk/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: this.selected }),
+          });
+          if (!res.ok) alert("Bulk delete failed");
+          this.selected = [];
+          await this.loadPDFs();
+        } catch (e) {
+          console.error(e);
         }
       },
 
@@ -290,6 +437,7 @@ endblock %} {% block layout %} {% include "components/sidebar.html" %}
           formData.append("files", item.file);
           formData.append("titles", item.title);
           formData.append("descriptions", item.description);
+          formData.append("released_dates", item.releasedDate || "");
         }
 
         try {
@@ -311,6 +459,7 @@ endblock %} {% block layout %} {% include "components/sidebar.html" %}
               isError: failed > 0,
             };
             this.batchFiles = [];
+            this.page = 1;
             await this.loadPDFs();
           } else {
             const err = await res.json().catch(() => ({}));
